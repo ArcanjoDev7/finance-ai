@@ -52,6 +52,8 @@ function transactionTypeFor(intent: string) {
     case 'create_income': return 'income';
     case 'create_investment': return 'investment';
     case 'create_crypto_purchase': return 'crypto_buy';
+    case 'create_crypto_sale': return 'crypto_sell';
+    case 'create_crypto_conversion': return 'crypto_conversion';
     default: return null;
   }
 }
@@ -68,7 +70,7 @@ async function persistFinancialAction(admin: ReturnType<typeof createClient>, us
   }
   let { data: account } = await admin.from('accounts').select('id').eq('user_id', userId).eq('wallet_id', wallet.id).order('created_at').limit(1).maybeSingle();
   if (!account) {
-    const { data, error } = await admin.from('accounts').insert({ user_id: userId, wallet_id: wallet.id, name: 'Conta principal', account_type: transactionType === 'crypto_buy' ? 'crypto_wallet' : transactionType === 'investment' ? 'brokerage' : 'checking', currency_code: action.currency ?? 'BRL' }).select('id').single();
+    const { data, error } = await admin.from('accounts').insert({ user_id: userId, wallet_id: wallet.id, name: 'Conta principal', account_type: transactionType.startsWith('crypto_') ? 'crypto_wallet' : transactionType === 'investment' ? 'brokerage' : 'checking', currency_code: action.currency ?? 'BRL' }).select('id').single();
     if (error) throw new Error('ACCOUNT_CREATION_FAILED');
     account = data;
   }
@@ -155,7 +157,12 @@ Deno.serve(async (request) => {
   });
   if (!openAiResponse.ok) {
     await admin.from('ai_actions').update({ status: 'failed' }).eq('id', action.id);
-    return response({ error: { code: 'AI_PROVIDER_UNAVAILABLE' } }, 502);
+    const upstream = await openAiResponse.json().catch(() => null) as { error?: { code?: unknown; type?: unknown } } | null;
+    const providerCode = typeof upstream?.error?.code === 'string'
+      ? upstream.error.code
+      : typeof upstream?.error?.type === 'string' ? upstream.error.type : 'unknown_error';
+    console.error('OpenAI request rejected', { status: openAiResponse.status, providerCode });
+    return response({ error: { code: 'AI_PROVIDER_UNAVAILABLE', providerStatus: openAiResponse.status, providerCode } }, 502);
   }
 
   const modelResult = await openAiResponse.json() as { output_text?: string };

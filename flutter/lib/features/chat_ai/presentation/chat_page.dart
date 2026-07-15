@@ -3,9 +3,10 @@ import 'package:finance_ai/features/dashboard/presentation/pages/dashboard_previ
 import 'package:flutter/material.dart';
 
 class ChatPage extends StatefulWidget {
-  const ChatPage({super.key, required this.onTransactionCreated, required this.onInvestmentCreated});
+  const ChatPage({super.key, required this.onTransactionCreated, required this.onInvestmentCreated, required this.onCryptoCreated});
   final ValueChanged<FinanceEntry> onTransactionCreated;
   final ValueChanged<InvestmentItem> onInvestmentCreated;
+  final ValueChanged<CryptoItem> onCryptoCreated;
   @override State<ChatPage> createState() => _ChatPageState();
 }
 
@@ -40,7 +41,7 @@ class _ChatPageState extends State<ChatPage> {
       final action = _token == null ? _parse(text) : Map<String, dynamic>.from((await SupabaseWebClient.instance.chat(_token!, {'message': text, 'idempotencyKey': _key()}))['action'] as Map? ?? const {});
       _apply(action);
       if (mounted) setState(() => _messages.add(_Message(_response(action), action: action)));
-    } on AiRequestException catch (error) { if (mounted) setState(() => _messages.add(_Message(_aiErrorMessage(error.code)))); }
+    } on AiRequestException catch (error) { if (mounted) setState(() => _messages.add(_Message(_aiErrorMessageWithProvider(error)))); }
     catch (_) { if (mounted) setState(() => _messages.add(const _Message('Não consegui processar esse comando. Tente novamente.'))); }
     finally { if (mounted) setState(() => _sending = false); }
   }
@@ -49,15 +50,26 @@ class _ChatPageState extends State<ChatPage> {
     final source = text.toLowerCase(); final match = RegExp(r'(\d+(?:[\.,]\d{1,2})?)').firstMatch(source); final amount = double.tryParse((match?.group(1) ?? '').replaceAll(',', '.'));
     if (source.contains('gastei') || source.contains('paguei')) return {'intent': 'create_expense', 'amount': amount, 'description': text, 'category': source.contains('mercado') ? 'Alimentação' : 'Outros'};
     if (source.contains('recebi') || source.contains('salário') || source.contains('salario')) return {'intent': 'create_income', 'amount': amount, 'description': text, 'category': 'Receitas'};
-    if (source.contains('bitcoin') || source.contains('btc')) return {'intent': 'create_crypto_purchase', 'amount': amount, 'investment': 'Bitcoin'};
+    if (source.contains('vendi') || source.contains('saquei')) return {'intent': 'create_crypto_sale', 'amount': amount, 'investment': source.contains('bitcoin') || source.contains('btc') ? 'Bitcoin' : 'Cripto'};
+    if (source.contains('converti') || source.contains('conversão') || source.contains('conversao')) return {'intent': 'create_crypto_conversion', 'amount': amount, 'investment': source.contains('bitcoin') || source.contains('btc') ? 'Bitcoin' : 'Cripto'};
+    if (source.contains('bitcoin') || source.contains('btc') || source.contains('ethereum') || source.contains('eth')) return {'intent': 'create_crypto_purchase', 'amount': amount, 'investment': source.contains('ethereum') || source.contains('eth') ? 'Ethereum' : 'Bitcoin'};
     if (source.contains('cdb') || source.contains('investi')) return {'intent': 'create_investment', 'amount': amount, 'investment': source.contains('cdb') ? 'CDB' : 'Investimento', 'bank': 'Carteira principal'};
     return {'intent': 'query_summary'};
   }
 
-  void _apply(Map<String, dynamic> action) { final amount = (action['amount'] as num?)?.toDouble(); if (amount == null || amount <= 0) return; final id = _key(); switch (action['intent']) { case 'create_expense': widget.onTransactionCreated(FinanceEntry(id: id, description: '${action['description'] ?? 'Despesa'}', category: '${action['category'] ?? 'Outros'}', amount: amount, kind: EntryKind.expense, date: DateTime.now())); return; case 'create_income': widget.onTransactionCreated(FinanceEntry(id: id, description: '${action['description'] ?? 'Receita'}', category: '${action['category'] ?? 'Receitas'}', amount: amount, kind: EntryKind.income, date: DateTime.now())); return; case 'create_investment': widget.onInvestmentCreated(InvestmentItem(name: '${action['investment'] ?? 'Investimento'}', institution: '${action['bank'] ?? 'Carteira principal'}', type: 'Renda fixa', amount: amount, yieldDescription: 'Registrado pela IA')); return; case 'create_crypto_purchase': widget.onInvestmentCreated(InvestmentItem(name: '${action['investment'] ?? 'Bitcoin'}', institution: 'Carteira de cripto', type: 'Criptomoeda', amount: amount, yieldDescription: 'Registrado pela IA')); return; default: return; } }
+  void _apply(Map<String, dynamic> action) { final amount = (action['amount'] as num?)?.toDouble(); if (amount == null || amount <= 0) return; final id = _key(); switch (action['intent']) { case 'create_expense': widget.onTransactionCreated(FinanceEntry(id: id, description: '${action['description'] ?? 'Despesa'}', category: '${action['category'] ?? 'Outros'}', amount: amount, kind: EntryKind.expense, date: DateTime.now())); return; case 'create_income': widget.onTransactionCreated(FinanceEntry(id: id, description: '${action['description'] ?? 'Receita'}', category: '${action['category'] ?? 'Receitas'}', amount: amount, kind: EntryKind.income, date: DateTime.now())); return; case 'create_investment': widget.onInvestmentCreated(InvestmentItem(name: '${action['investment'] ?? 'Investimento'}', institution: '${action['bank'] ?? 'Carteira principal'}', type: 'Renda fixa', amount: amount, yieldDescription: 'Registrado pela IA')); return; case 'create_crypto_purchase': widget.onCryptoCreated(CryptoItem(asset: '${action['investment'] ?? 'Bitcoin'}', amount: amount, operation: 'Compra')); return; case 'create_crypto_sale': widget.onCryptoCreated(CryptoItem(asset: '${action['investment'] ?? 'Cripto'}', amount: amount, operation: 'Venda')); return; case 'create_crypto_conversion': widget.onCryptoCreated(CryptoItem(asset: '${action['investment'] ?? 'Cripto'}', amount: amount, operation: 'Conversão')); return; default: return; } }
   String _response(Map<String, dynamic> action) => switch (action['intent']) {'create_expense' => 'Despesa adicionada.', 'create_income' => 'Receita adicionada.', 'create_investment' => 'Investimento adicionado.', 'create_crypto_purchase' => 'Compra de cripto registrada.', _ => 'Faça login para consultar dados sincronizados. Sem login, você pode testar lançamentos na sessão atual.'};
   String _aiErrorMessage(String code) => switch (code) { 'AI_CONFIGURATION_REQUIRED' => 'A IA ainda não está configurada no Supabase. Falta validar a chave ou o modelo da OpenAI.', 'AI_PROVIDER_UNAVAILABLE' => 'A OpenAI recusou a solicitação. Verifique a chave, o modelo configurado e os créditos da conta OpenAI.', 'ACTION_PERSISTENCE_FAILED' => 'A IA entendeu o comando, mas não conseguiu salvar o lançamento no banco. A função precisa ser publicada com a atualização atual.', 'UNAUTHORIZED' => 'Sua sessão expirou. Saia e entre novamente.', _ => 'A IA não concluiu o comando ($code).'};
-  String _key() { final value = DateTime.now().microsecondsSinceEpoch.toRadixString(16).padLeft(12, '0'); return '00000000-0000-4000-8000-$value'; }
+  String _aiErrorMessageWithProvider(AiRequestException error) {
+    if (error.code != 'AI_PROVIDER_UNAVAILABLE') return _aiErrorMessage(error.code);
+    final detail = error.providerStatus == null ? '' : ' Diagnóstico OpenAI: HTTP ${error.providerStatus}${error.providerCode == null ? '' : ' (${error.providerCode})'}.';
+    return 'A OpenAI recusou a solicitação.$detail';
+  }
+  String _key() {
+    final raw = DateTime.now().microsecondsSinceEpoch.toRadixString(16);
+    final value = raw.substring(raw.length - 12).padLeft(12, '0');
+    return '00000000-0000-4000-8000-$value';
+  }
 
   @override Widget build(BuildContext context) => Column(children: [
     Padding(padding: const EdgeInsets.fromLTRB(28, 24, 28, 12), child: Row(children: [const CircleAvatar(backgroundColor: Color(0xFF52318E), child: Icon(Icons.auto_awesome)), const SizedBox(width: 12), Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('Assistente Financeiro', style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700)), Text(_token == null ? 'Modo de teste · entre para salvar na sua conta' : 'Conta conectada · dados sincronizados', style: const TextStyle(color: Colors.white70))])), if (_token == null) OutlinedButton(onPressed: _authenticate, child: const Text('Entrar ou criar conta'))])),

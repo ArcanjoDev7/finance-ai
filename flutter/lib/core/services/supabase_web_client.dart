@@ -9,8 +9,10 @@ class AuthResult {
 }
 
 class AiRequestException implements Exception {
-  const AiRequestException(this.code);
+  const AiRequestException(this.code, {this.providerStatus, this.providerCode});
   final String code;
+  final int? providerStatus;
+  final String? providerCode;
 }
 
 class SupabaseWebClient {
@@ -69,7 +71,9 @@ class SupabaseWebClient {
       final data = error.response?.data;
       final errorData = data is Map ? data['error'] : null;
       final code = errorData is Map ? errorData['code'] : null;
-      throw AiRequestException(code is String ? code : 'AI_REQUEST_FAILED');
+      final providerStatus = errorData is Map && errorData['providerStatus'] is num ? (errorData['providerStatus'] as num).toInt() : null;
+      final providerCode = errorData is Map && errorData['providerCode'] is String ? errorData['providerCode'] as String : null;
+      throw AiRequestException(code is String ? code : 'AI_REQUEST_FAILED', providerStatus: providerStatus, providerCode: providerCode);
     }
   }
 }
