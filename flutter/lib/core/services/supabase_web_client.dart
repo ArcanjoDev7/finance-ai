@@ -15,8 +15,16 @@ class SupabaseWebClient {
   final Dio _dio = Dio();
   final FlutterSecureStorage _storage = const FlutterSecureStorage();
 
-  Future<AuthResult> signIn(String email, String password) async {
+  AppEnvironmentConfig get _config {
     final config = AppEnvironmentConfig.fromBuild();
+    if (!config.hasSupabaseConfiguration) {
+      throw StateError('Supabase não configurado para esta versão do aplicativo.');
+    }
+    return config;
+  }
+
+  Future<AuthResult> signIn(String email, String password) async {
+    final config = _config;
     final response = await _dio.post<Map<String, dynamic>>(
       '${config.supabaseUrl}/auth/v1/token?grant_type=password',
       data: {'email': email, 'password': password},
@@ -29,7 +37,7 @@ class SupabaseWebClient {
   }
 
   Future<AuthResult> signUp(String email, String password) async {
-    final config = AppEnvironmentConfig.fromBuild();
+    final config = _config;
     final response = await _dio.post<Map<String, dynamic>>(
       '${config.supabaseUrl}/auth/v1/signup',
       data: {'email': email, 'password': password},
@@ -44,7 +52,7 @@ class SupabaseWebClient {
   Future<void> signOut() => _storage.delete(key: _sessionKey);
 
   Future<Map<String, dynamic>> chat(String token, Map<String, dynamic> body) async {
-    final config = AppEnvironmentConfig.fromBuild();
+    final config = _config;
     final response = await _dio.post<Map<String, dynamic>>(
       '${config.supabaseUrl}/functions/v1/chat',
       data: body,
