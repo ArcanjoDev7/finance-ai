@@ -1,5 +1,6 @@
 import 'package:finance_ai/app/constants/app_breakpoints.dart';
 import 'package:finance_ai/app/theme/app_theme.dart';
+import 'package:finance_ai/features/chat_ai/presentation/chat_page.dart';
 import 'package:flutter/material.dart';
 
 class DashboardPreviewPage extends StatefulWidget {
@@ -102,6 +103,7 @@ class _SectionPlaceholder extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (index == 3) return const ChatPage();
     const sections = [
       ('Transações', Icons.receipt_long_outlined, 'Registre receitas, despesas, transferências e reembolsos.'),
       ('Investimentos', Icons.trending_up, 'Acompanhe CDB, renda fixa e sua evolução patrimonial.'),

@@ -1,5 +1,5 @@
 import 'package:finance_ai/app/theme/app_theme.dart';
-import 'package:finance_ai/features/dashboard/presentation/pages/dashboard_preview_page.dart';
+import 'package:finance_ai/features/auth/presentation/auth_gate.dart';
 import 'package:flutter/material.dart';
 
 class FinanceAiApp extends StatelessWidget {
@@ -13,7 +13,7 @@ class FinanceAiApp extends StatelessWidget {
       theme: AppTheme.light,
       darkTheme: AppTheme.dark,
       themeMode: ThemeMode.dark,
-      home: const DashboardPreviewPage(),
+      home: const AuthGate(),
     );
   }
 }
