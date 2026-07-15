@@ -9,82 +9,59 @@ class ChatPage extends StatefulWidget {
   @override State<ChatPage> createState() => _ChatPageState();
 }
 
-class _ChatMessage { const _ChatMessage({required this.text, required this.fromUser, this.action}); final String text; final bool fromUser; final Map<String, dynamic>? action; }
+class _Message { const _Message(this.text, {this.user = false, this.action}); final String text; final bool user; final Map<String, dynamic>? action; }
 
 class _ChatPageState extends State<ChatPage> {
   final _input = TextEditingController();
-  final _messages = <_ChatMessage>[];
+  final _messages = <_Message>[];
   String? _token;
   bool _sending = false;
 
+  @override void initState() { super.initState(); SupabaseWebClient.instance.restoredSession().then((value) { if (mounted && value != null) setState(() => _token = value); }); }
   @override void dispose() { _input.dispose(); super.dispose(); }
 
-  Future<void> _signIn() async {
-    final email = TextEditingController();
-    final password = TextEditingController();
-    final token = await showDialog<String>(context: context, builder: (dialogContext) => AlertDialog(title: const Text('Entrar no Finance AI'), content: Column(mainAxisSize: MainAxisSize.min, children: [TextField(controller: email, keyboardType: TextInputType.emailAddress, decoration: const InputDecoration(labelText: 'E-mail')), const SizedBox(height: 12), TextField(controller: password, obscureText: true, decoration: const InputDecoration(labelText: 'Senha'))]), actions: [TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Cancelar')), FilledButton(onPressed: () async { try { final value = await SupabaseWebClient.instance.signIn(email.text.trim(), password.text); if (dialogContext.mounted) Navigator.pop(dialogContext, value); } catch (_) { if (dialogContext.mounted) ScaffoldMessenger.of(dialogContext).showSnackBar(const SnackBar(content: Text('Não foi possível entrar. Confira e-mail e senha.'))); } }, child: const Text('Entrar'))]));
+  Future<void> _authenticate() async {
+    final email = TextEditingController(); final password = TextEditingController(); var create = false;
+    final result = await showDialog<AuthResult>(context: context, builder: (dialogContext) => StatefulBuilder(builder: (context, setDialogState) => AlertDialog(
+      title: Text(create ? 'Criar conta' : 'Entrar no Finance AI'),
+      content: Column(mainAxisSize: MainAxisSize.min, children: [Text(create ? 'Crie sua conta para salvar os dados no Finance AI.' : 'Entre para sincronizar seus dados com segurança.'), const SizedBox(height: 16), TextField(controller: email, keyboardType: TextInputType.emailAddress, decoration: const InputDecoration(labelText: 'E-mail')), const SizedBox(height: 12), TextField(controller: password, obscureText: true, decoration: const InputDecoration(labelText: 'Senha', helperText: 'Mínimo de 6 caracteres'))]),
+      actions: [TextButton(onPressed: () => setDialogState(() => create = !create), child: Text(create ? 'Já tenho conta' : 'Criar conta')), TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Cancelar')), FilledButton(onPressed: () async { if (password.text.length < 6) { ScaffoldMessenger.of(dialogContext).showSnackBar(const SnackBar(content: Text('A senha precisa ter pelo menos 6 caracteres.'))); return; } try { final value = create ? await SupabaseWebClient.instance.signUp(email.text.trim(), password.text) : await SupabaseWebClient.instance.signIn(email.text.trim(), password.text); if (dialogContext.mounted) Navigator.pop(dialogContext, value); } catch (_) { if (dialogContext.mounted) ScaffoldMessenger.of(dialogContext).showSnackBar(SnackBar(content: Text(create ? 'Não foi possível criar a conta. Tente outro e-mail.' : 'Não foi possível entrar. Confira e-mail e senha.'))); } }, child: Text(create ? 'Criar conta' : 'Entrar'))],
+    )));
     email.dispose(); password.dispose();
-    if (token != null && mounted) { setState(() => _token = token); ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Conta conectada. Seus comandos serão sincronizados.'))); }
+    if (!mounted || result == null) return;
+    if (result.accessToken != null) { setState(() => _token = result.accessToken); ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Conta conectada. Seus dados serão sincronizados.'))); }
+    if (result.requiresEmailConfirmation) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Conta criada. Confirme o e-mail e entre para sincronizar os dados.')));
   }
 
-  Future<void> _send([String? suggested]) async {
-    final text = (suggested ?? _input.text).trim();
-    if (text.isEmpty || _sending) return;
-    setState(() { _messages.add(_ChatMessage(text: text, fromUser: true)); _input.clear(); _sending = true; });
+  Future<void> _send([String? suggestion]) async {
+    final text = (suggestion ?? _input.text).trim(); if (text.isEmpty || _sending) return;
+    setState(() { _messages.add(_Message(text, user: true)); _input.clear(); _sending = true; });
     try {
-      Map<String, dynamic> action;
-      if (_token == null) {
-        action = _localAction(text);
-      } else {
-        final data = await SupabaseWebClient.instance.chat(_token!, {'message': text, 'idempotencyKey': _idempotencyKey()});
-        action = Map<String, dynamic>.from(data['action'] as Map? ?? const {});
-      }
-      _applyAction(action);
-      if (mounted) setState(() => _messages.add(_ChatMessage(text: _actionMessage(action), fromUser: false, action: action)));
-    } catch (_) {
-      if (mounted) setState(() => _messages.add(const _ChatMessage(text: 'Não consegui processar esse comando agora. Tente novamente.', fromUser: false)));
-    } finally { if (mounted) setState(() => _sending = false); }
+      final action = _token == null ? _parse(text) : Map<String, dynamic>.from((await SupabaseWebClient.instance.chat(_token!, {'message': text, 'idempotencyKey': _key()}))['action'] as Map? ?? const {});
+      _apply(action);
+      if (mounted) setState(() => _messages.add(_Message(_response(action), action: action)));
+    } catch (_) { if (mounted) setState(() => _messages.add(const _Message('Não consegui processar esse comando. Tente novamente.'))); }
+    finally { if (mounted) setState(() => _sending = false); }
   }
 
-  Map<String, dynamic> _localAction(String message) {
-    final normalized = message.toLowerCase();
-    final value = RegExp(r'(\d+(?:[\.,]\d{1,2})?)').firstMatch(normalized)?.group(1)?.replaceAll(',', '.');
-    final amount = double.tryParse(value ?? '');
-    if (normalized.contains('gastei') || normalized.contains('paguei')) return {'intent': 'create_expense', 'amount': amount, 'description': _description(message), 'category': normalized.contains('mercado') ? 'Alimentação' : 'Outros'};
-    if (normalized.contains('recebi') || normalized.contains('salário') || normalized.contains('salario')) return {'intent': 'create_income', 'amount': amount, 'description': _description(message), 'category': 'Receitas'};
-    if (normalized.contains('cdb') || normalized.contains('investi')) return {'intent': 'create_investment', 'amount': amount, 'investment': normalized.contains('cdb') ? 'CDB' : 'Investimento', 'bank': 'Carteira principal'};
-    if (normalized.contains('bitcoin') || normalized.contains('btc')) return {'intent': 'create_crypto_purchase', 'amount': amount, 'investment': 'Bitcoin'};
+  Map<String, dynamic> _parse(String text) {
+    final source = text.toLowerCase(); final match = RegExp(r'(\d+(?:[\.,]\d{1,2})?)').firstMatch(source); final amount = double.tryParse((match?.group(1) ?? '').replaceAll(',', '.'));
+    if (source.contains('gastei') || source.contains('paguei')) return {'intent': 'create_expense', 'amount': amount, 'description': text, 'category': source.contains('mercado') ? 'Alimentação' : 'Outros'};
+    if (source.contains('recebi') || source.contains('salário') || source.contains('salario')) return {'intent': 'create_income', 'amount': amount, 'description': text, 'category': 'Receitas'};
+    if (source.contains('bitcoin') || source.contains('btc')) return {'intent': 'create_crypto_purchase', 'amount': amount, 'investment': 'Bitcoin'};
+    if (source.contains('cdb') || source.contains('investi')) return {'intent': 'create_investment', 'amount': amount, 'investment': source.contains('cdb') ? 'CDB' : 'Investimento', 'bank': 'Carteira principal'};
     return {'intent': 'query_summary'};
   }
 
-  String _description(String message) { final text = message.trim(); return text.isEmpty ? 'Lançamento pelo assistente' : '${text[0].toUpperCase()}${text.substring(1)}'; }
-  void _applyAction(Map<String, dynamic> action) {
-    final amount = (action['amount'] as num?)?.toDouble();
-    if (amount == null || amount <= 0) return;
-    switch (action['intent']) {
-      case 'create_expense': widget.onTransactionCreated(FinanceEntry(id: _idempotencyKey(), description: '${action['description'] ?? 'Despesa'}', category: '${action['category'] ?? 'Outros'}', amount: amount, kind: EntryKind.expense, date: DateTime.now()));
-      case 'create_income': widget.onTransactionCreated(FinanceEntry(id: _idempotencyKey(), description: '${action['description'] ?? 'Receita'}', category: '${action['category'] ?? 'Receitas'}', amount: amount, kind: EntryKind.income, date: DateTime.now()));
-      case 'create_investment': widget.onInvestmentCreated(InvestmentItem(name: '${action['investment'] ?? 'Investimento'}', institution: '${action['bank'] ?? 'Carteira principal'}', type: '${action['investment'] ?? 'Investimento'}', amount: amount, yieldDescription: 'Registrado pelo assistente'));
-      case 'create_crypto_purchase': widget.onInvestmentCreated(InvestmentItem(name: '${action['investment'] ?? 'Bitcoin'}', institution: 'Carteira de cripto', type: 'Criptomoeda', amount: amount, yieldDescription: 'Registrado pelo assistente'));
-    }
-  }
-
-  String _idempotencyKey() {
-    final value = DateTime.now().microsecondsSinceEpoch.toRadixString(16).padLeft(12, '0');
-    return '00000000-0000-4000-8000-$value';
-  }
-  String _actionMessage(Map<String, dynamic> action) => switch (action['intent']) { 'create_expense' => 'Despesa adicionada com sucesso.', 'create_income' => 'Receita adicionada com sucesso.', 'create_investment' => 'Investimento adicionado com sucesso.', 'create_crypto_purchase' => 'Compra de cripto registrada com sucesso.', _ => 'Posso registrar receitas, despesas, investimentos ou responder consultas quando sua conta estiver conectada.' };
+  void _apply(Map<String, dynamic> action) { final amount = (action['amount'] as num?)?.toDouble(); if (amount == null || amount <= 0) return; final id = _key(); switch (action['intent']) { case 'create_expense': widget.onTransactionCreated(FinanceEntry(id: id, description: '${action['description'] ?? 'Despesa'}', category: '${action['category'] ?? 'Outros'}', amount: amount, kind: EntryKind.expense, date: DateTime.now())); return; case 'create_income': widget.onTransactionCreated(FinanceEntry(id: id, description: '${action['description'] ?? 'Receita'}', category: '${action['category'] ?? 'Receitas'}', amount: amount, kind: EntryKind.income, date: DateTime.now())); return; case 'create_investment': widget.onInvestmentCreated(InvestmentItem(name: '${action['investment'] ?? 'Investimento'}', institution: '${action['bank'] ?? 'Carteira principal'}', type: 'Renda fixa', amount: amount, yieldDescription: 'Registrado pela IA')); return; case 'create_crypto_purchase': widget.onInvestmentCreated(InvestmentItem(name: '${action['investment'] ?? 'Bitcoin'}', institution: 'Carteira de cripto', type: 'Criptomoeda', amount: amount, yieldDescription: 'Registrado pela IA')); return; default: return; } }
+  String _response(Map<String, dynamic> action) => switch (action['intent']) {'create_expense' => 'Despesa adicionada.', 'create_income' => 'Receita adicionada.', 'create_investment' => 'Investimento adicionado.', 'create_crypto_purchase' => 'Compra de cripto registrada.', _ => 'Faça login para consultar dados sincronizados. Sem login, você pode testar lançamentos na sessão atual.'};
+  String _key() { final value = DateTime.now().microsecondsSinceEpoch.toRadixString(16).padLeft(12, '0'); return '00000000-0000-4000-8000-$value'; }
 
   @override Widget build(BuildContext context) => Column(children: [
-    Padding(padding: const EdgeInsets.fromLTRB(28, 24, 28, 10), child: _ChatHeader(connected: _token != null, onSignIn: _signIn)),
-    Expanded(child: _messages.isEmpty ? _ChatEmpty(onSuggestion: _send) : ListView(padding: const EdgeInsets.fromLTRB(28, 12, 28, 12), children: _messages.map((message) => _MessageBubble(message: message)).toList())),
-    if (_sending) const LinearProgressIndicator(minHeight: 2),
-    Padding(padding: const EdgeInsets.all(24), child: _ChatInput(controller: _input, enabled: !_sending, onSubmit: _send)),
+    Padding(padding: const EdgeInsets.fromLTRB(28, 24, 28, 12), child: Row(children: [const CircleAvatar(backgroundColor: Color(0xFF52318E), child: Icon(Icons.auto_awesome)), const SizedBox(width: 12), Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('Assistente Financeiro', style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700)), Text(_token == null ? 'Modo de teste · entre para salvar na sua conta' : 'Conta conectada · dados sincronizados', style: const TextStyle(color: Colors.white70))])), if (_token == null) OutlinedButton(onPressed: _authenticate, child: const Text('Entrar ou criar conta'))])),
+    Expanded(child: _messages.isEmpty ? _Empty(onSend: _send) : ListView(padding: const EdgeInsets.symmetric(horizontal: 28), children: _messages.map((message) => _Bubble(message: message)).toList())), if (_sending) const LinearProgressIndicator(minHeight: 2), Padding(padding: const EdgeInsets.all(24), child: Row(children: [Expanded(child: TextField(controller: _input, onSubmitted: (_) => _send(), decoration: const InputDecoration(prefixIcon: Icon(Icons.auto_awesome), hintText: 'Ex.: Gastei R\$ 50 no mercado'))), const SizedBox(width: 12), FilledButton.icon(onPressed: _sending ? null : _send, icon: const Icon(Icons.arrow_upward), label: const Text('Enviar'))]))
   ]);
 }
 
-class _ChatHeader extends StatelessWidget { const _ChatHeader({required this.connected, required this.onSignIn}); final bool connected; final VoidCallback onSignIn; @override Widget build(BuildContext context) => Row(children: [const CircleAvatar(backgroundColor: Color(0xFF52318E), child: Icon(Icons.auto_awesome)), const SizedBox(width: 12), Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('Assistente Financeiro', style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700)), Text(connected ? 'Conta conectada · comandos sincronizados' : 'Modo de teste · entre para sincronizar', style: const TextStyle(color: Colors.white70))])), if (!connected) OutlinedButton(onPressed: onSignIn, child: const Text('Entrar'))]); }
-class _ChatEmpty extends StatelessWidget { const _ChatEmpty({required this.onSuggestion}); final ValueChanged<String> onSuggestion; @override Widget build(BuildContext context) { const suggestions = ['Gastei R\$ 50 no mercado', 'Quanto gastei este mês?', 'Investi R\$ 5.000 no CDB', 'Comprei R\$ 1.500 de Bitcoin']; return Center(child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 680), child: Column(mainAxisSize: MainAxisSize.min, children: [const Icon(Icons.auto_awesome, size: 52, color: Color(0xFFC4B5FD)), const SizedBox(height: 16), Text('Como posso ajudar com suas finanças?', style: Theme.of(context).textTheme.headlineSmall), const SizedBox(height: 10), const Text('Use linguagem natural. Comandos simples são registrados sem confirmação.', textAlign: TextAlign.center), const SizedBox(height: 22), Wrap(spacing: 10, runSpacing: 10, alignment: WrapAlignment.center, children: suggestions.map((value) => ActionChip(label: Text(value), onPressed: () => onSuggestion(value))).toList())]))); } }
-class _MessageBubble extends StatelessWidget { const _MessageBubble({required this.message}); final _ChatMessage message; @override Widget build(BuildContext context) => Align(alignment: message.fromUser ? Alignment.centerRight : Alignment.centerLeft, child: Container(margin: const EdgeInsets.only(bottom: 12), padding: const EdgeInsets.all(15), constraints: const BoxConstraints(maxWidth: 660), decoration: BoxDecoration(color: message.fromUser ? const Color(0xFF59368F) : const Color(0xFF211C29), borderRadius: BorderRadius.circular(16)), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(message.fromUser ? 'Você' : 'Finance AI', style: const TextStyle(fontWeight: FontWeight.w700)), const SizedBox(height: 5), Text(message.text), if (message.action?['amount'] != null) ...[const SizedBox(height: 12), _ActionCard(action: message.action!)] ]))); }
-class _ActionCard extends StatelessWidget { const _ActionCard({required this.action}); final Map<String, dynamic> action; @override Widget build(BuildContext context) => Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: const Color(0x3310B981), borderRadius: BorderRadius.circular(12), border: Border.all(color: const Color(0xFF34D399))), child: Row(children: [const Icon(Icons.check_circle_outline, color: Color(0xFF34D399)), const SizedBox(width: 10), Expanded(child: Text('${action['intent']} · R\$ ${(action['amount'] as num).toStringAsFixed(2).replaceAll('.', ',')}'))])); }
-class _ChatInput extends StatelessWidget { const _ChatInput({required this.controller, required this.enabled, required this.onSubmit}); final TextEditingController controller; final bool enabled; final Future<void> Function([String?]) onSubmit; @override Widget build(BuildContext context) => Row(children: [Expanded(child: TextField(controller: controller, enabled: enabled, onSubmitted: (_) => onSubmit(), decoration: const InputDecoration(hintText: 'Ex.: Gastei R\$ 50 no mercado', prefixIcon: Icon(Icons.auto_awesome)))), const SizedBox(width: 12), FilledButton.icon(onPressed: enabled ? () => onSubmit() : null, icon: const Icon(Icons.arrow_upward), label: const Text('Enviar'))]); }
+class _Empty extends StatelessWidget { const _Empty({required this.onSend}); final Future<void> Function([String?]) onSend; @override Widget build(BuildContext context) { const items = ['Gastei R\$ 50 no mercado', 'Recebi R\$ 4.000 de salário', 'Investi R\$ 5.000 no CDB', 'Comprei R\$ 1.500 de Bitcoin']; return Center(child: Column(mainAxisSize: MainAxisSize.min, children: [const Icon(Icons.auto_awesome, size: 54, color: Color(0xFFC4B5FD)), const SizedBox(height: 12), Text('Como posso ajudar com suas finanças?', style: Theme.of(context).textTheme.headlineSmall), const SizedBox(height: 18), Wrap(spacing: 10, runSpacing: 10, alignment: WrapAlignment.center, children: items.map((item) => ActionChip(onPressed: () => onSend(item), label: Text(item))).toList())])); } }
+class _Bubble extends StatelessWidget { const _Bubble({required this.message}); final _Message message; @override Widget build(BuildContext context) => Align(alignment: message.user ? Alignment.centerRight : Alignment.centerLeft, child: Container(margin: const EdgeInsets.only(bottom: 12), padding: const EdgeInsets.all(15), constraints: const BoxConstraints(maxWidth: 660), decoration: BoxDecoration(color: message.user ? const Color(0xFF59368F) : const Color(0xFF211C29), borderRadius: BorderRadius.circular(16)), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(message.user ? 'Você' : 'Finance AI', style: const TextStyle(fontWeight: FontWeight.w700)), const SizedBox(height: 6), Text(message.text), if (message.action?['amount'] != null) Padding(padding: const EdgeInsets.only(top: 10), child: Text('Ação registrada · R\$ ${(message.action!['amount'] as num).toStringAsFixed(2).replaceAll('.', ',')}', style: const TextStyle(color: Color(0xFF6EE7B7))))]))); }

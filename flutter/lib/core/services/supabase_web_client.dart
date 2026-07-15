@@ -1,22 +1,55 @@
 import 'package:dio/dio.dart';
 import 'package:finance_ai/app/environment/app_environment.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+
+class AuthResult {
+  const AuthResult({this.accessToken, this.requiresEmailConfirmation = false});
+  final String? accessToken;
+  final bool requiresEmailConfirmation;
+}
 
 class SupabaseWebClient {
   SupabaseWebClient._();
   static final instance = SupabaseWebClient._();
+  static const _sessionKey = 'finance_ai_access_token';
   final Dio _dio = Dio();
+  final FlutterSecureStorage _storage = const FlutterSecureStorage();
 
-  Future<String> signIn(String email, String password) async {
+  Future<AuthResult> signIn(String email, String password) async {
     final config = AppEnvironmentConfig.fromBuild();
-    final response = await _dio.post<Map<String, dynamic>>('${config.supabaseUrl}/auth/v1/token?grant_type=password', data: {'email': email, 'password': password}, options: Options(headers: {'apikey': config.supabasePublishableKey}));
+    final response = await _dio.post<Map<String, dynamic>>(
+      '${config.supabaseUrl}/auth/v1/token?grant_type=password',
+      data: {'email': email, 'password': password},
+      options: Options(headers: {'apikey': config.supabasePublishableKey}),
+    );
     final token = response.data?['access_token'] as String?;
     if (token == null) throw StateError('Sessão não retornada.');
-    return token;
+    await _storage.write(key: _sessionKey, value: token);
+    return AuthResult(accessToken: token);
   }
+
+  Future<AuthResult> signUp(String email, String password) async {
+    final config = AppEnvironmentConfig.fromBuild();
+    final response = await _dio.post<Map<String, dynamic>>(
+      '${config.supabaseUrl}/auth/v1/signup',
+      data: {'email': email, 'password': password},
+      options: Options(headers: {'apikey': config.supabasePublishableKey}),
+    );
+    final token = response.data?['access_token'] as String?;
+    if (token != null) await _storage.write(key: _sessionKey, value: token);
+    return AuthResult(accessToken: token, requiresEmailConfirmation: token == null);
+  }
+
+  Future<String?> restoredSession() => _storage.read(key: _sessionKey);
+  Future<void> signOut() => _storage.delete(key: _sessionKey);
 
   Future<Map<String, dynamic>> chat(String token, Map<String, dynamic> body) async {
     final config = AppEnvironmentConfig.fromBuild();
-    final response = await _dio.post<Map<String, dynamic>>('${config.supabaseUrl}/functions/v1/chat', data: body, options: Options(headers: {'apikey': config.supabasePublishableKey, 'Authorization': 'Bearer $token'}));
+    final response = await _dio.post<Map<String, dynamic>>(
+      '${config.supabaseUrl}/functions/v1/chat',
+      data: body,
+      options: Options(headers: {'apikey': config.supabasePublishableKey, 'Authorization': 'Bearer $token'}),
+    );
     return response.data ?? const {};
   }
 }
