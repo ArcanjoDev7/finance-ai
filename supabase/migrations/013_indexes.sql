@@ -1,0 +1,13 @@
+create index transactions_user_occurred_idx on public.transactions(user_id, occurred_at desc) where deleted_at is null;
+create index transactions_account_occurred_idx on public.transactions(account_id, occurred_at desc) where deleted_at is null;
+create index transactions_wallet_occurred_idx on public.transactions(wallet_id, occurred_at desc) where deleted_at is null;
+create index transactions_category_occurred_idx on public.transactions(category_id, occurred_at desc) where deleted_at is null;
+create index transactions_type_status_idx on public.transactions(user_id, transaction_type, status) where deleted_at is null;
+create index transactions_created_idx on public.transactions(user_id, created_at desc);
+create index accounts_user_wallet_idx on public.accounts(user_id,wallet_id) where deleted_at is null;
+create index cards_user_idx on public.cards(user_id) where deleted_at is null;
+create index investments_user_idx on public.investments(user_id) where deleted_at is null;
+create index crypto_transactions_user_idx on public.crypto_transactions(user_id,occurred_at desc) where deleted_at is null;
+create index chat_messages_session_idx on public.chat_messages(chat_session_id,created_at) where deleted_at is null;
+create index notifications_user_unread_idx on public.notifications(user_id,created_at desc) where deleted_at is null and read_at is null;
+create index audit_logs_entity_idx on public.audit_logs(user_id,entity_type,entity_id,created_at desc);

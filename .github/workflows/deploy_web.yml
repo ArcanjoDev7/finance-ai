@@ -1,0 +1,51 @@
+name: Deploy Flutter Web
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: flutter
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.44.0'
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: dart run build_runner build --delete-conflicting-outputs
+      - run: flutter analyze
+      - run: flutter test
+      - run: >-
+          flutter build web --release --base-href /${{ github.event.repository.name }}/
+          --dart-define=ENVIRONMENT=production
+          --dart-define=SUPABASE_URL=${{ vars.SUPABASE_URL }}
+          --dart-define=SUPABASE_PUBLISHABLE_KEY=${{ vars.SUPABASE_PUBLISHABLE_KEY }}
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: flutter/build/web
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
