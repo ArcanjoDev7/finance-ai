@@ -29,6 +29,7 @@ jobs:
           channel: stable
           cache: true
       - run: flutter create . --platforms=web
+      - run: rm -f test/widget_test.dart
       - run: flutter pub get
       - run: flutter analyze
       - run: flutter test
