@@ -138,7 +138,7 @@ Deno.serve(async (request) => {
 
   const { data: action, error: actionError } = await admin
     .from('ai_actions')
-    .insert({ user_id: userId, chat_session_id: sessionId, message_id: userMessage.id, intent: 'pending', input_json: { message: payload.message }, idempotency_key: payload.idempotencyKey, status: 'processing' })
+    .insert({ user_id: userId, chat_session_id: sessionId, message_id: userMessage.id, intent: 'pending', input_json: { message: payload.message }, idempotency_key: payload.idempotencyKey, status: 'received' })
     .select('id')
     .single();
   if (actionError) return response({ error: { code: 'ACTION_CREATION_FAILED' } }, 500);
