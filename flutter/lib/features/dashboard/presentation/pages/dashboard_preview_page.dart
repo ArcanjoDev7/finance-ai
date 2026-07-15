@@ -66,7 +66,7 @@ class _DashboardContent extends StatelessWidget {
               const SizedBox(height: 28),
               _MetricGrid(columns: columns, hideValues: hideValues),
               const SizedBox(height: 28),
-              _PreviewPanel(title: 'Resumo do mês', child: Row(children: [Expanded(child: _SummaryRow(label: 'Receitas', color: AppColors.positive, value: hideValues ? 'R$ ••••••' : 'R$ 0,00')), Expanded(child: _SummaryRow(label: 'Despesas', color: AppColors.negative, value: hideValues ? 'R$ ••••••' : 'R$ 0,00')), Expanded(child: _SummaryRow(label: 'Resultado', color: AppColors.brand, value: hideValues ? 'R$ ••••••' : 'R$ 0,00'))])),
+              _PreviewPanel(title: 'Resumo do mês', child: Row(children: [Expanded(child: _SummaryRow(label: 'Receitas', color: AppColors.positive, value: hideValues ? 'R\$ ••••••' : 'R\$ 0,00')), Expanded(child: _SummaryRow(label: 'Despesas', color: AppColors.negative, value: hideValues ? 'R\$ ••••••' : 'R\$ 0,00')), Expanded(child: _SummaryRow(label: 'Resultado', color: AppColors.brand, value: hideValues ? 'R\$ ••••••' : 'R\$ 0,00'))])),
               const SizedBox(height: 20),
               _PreviewPanel(title: 'Comece por aqui', child: Wrap(spacing: 12, runSpacing: 12, children: const [_QuickAction(icon: Icons.remove_circle_outline, label: 'Adicionar despesa'), _QuickAction(icon: Icons.add_circle_outline, label: 'Adicionar receita'), _QuickAction(icon: Icons.trending_up, label: 'Adicionar investimento'), _QuickAction(icon: Icons.chat_bubble_outline, label: 'Abrir assistente')])),
               const SizedBox(height: 20),
@@ -84,7 +84,7 @@ class _MetricGrid extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     const metrics = [(Icons.account_balance_wallet_outlined, 'Saldo atual'), (Icons.pie_chart_outline, 'Patrimônio'), (Icons.arrow_downward, 'Receitas'), (Icons.arrow_upward, 'Despesas')];
-    return GridView.builder(shrinkWrap: true, physics: const NeverScrollableScrollPhysics(), itemCount: metrics.length, gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: columns, mainAxisSpacing: 12, crossAxisSpacing: 12, childAspectRatio: columns == 1 ? 3.2 : 1.7), itemBuilder: (context, index) { final metric = metrics[index]; return Card(child: Padding(padding: const EdgeInsets.all(18), child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Icon(metric.$1, color: Theme.of(context).colorScheme.primary), Text(metric.$2), Text(hideValues ? 'R$ ••••••' : 'R$ 0,00', style: Theme.of(context).textTheme.headlineSmall)]))); });
+    return GridView.builder(shrinkWrap: true, physics: const NeverScrollableScrollPhysics(), itemCount: metrics.length, gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: columns, mainAxisSpacing: 12, crossAxisSpacing: 12, childAspectRatio: columns == 1 ? 3.2 : 1.7), itemBuilder: (context, index) { final metric = metrics[index]; return Card(child: Padding(padding: const EdgeInsets.all(18), child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Icon(metric.$1, color: Theme.of(context).colorScheme.primary), Text(metric.$2), Text(hideValues ? 'R\$ ••••••' : 'R\$ 0,00', style: Theme.of(context).textTheme.headlineSmall)]))); });
   }
 }
 
