@@ -124,7 +124,7 @@ Deno.serve(async (request) => {
     .eq('user_id', userId)
     .eq('idempotency_key', payload.idempotencyKey)
     .maybeSingle();
-  if (previous?.status === 'success') return response({ sessionId: previous.chat_session_id, action: previous.result_json, replayed: true });
+  if (previous?.status === 'processed') return response({ sessionId: previous.chat_session_id, action: previous.result_json, replayed: true });
 
   let sessionId = payload.sessionId as string | undefined;
   if (!sessionId) {
@@ -142,7 +142,7 @@ Deno.serve(async (request) => {
 
   const { data: action, error: actionError } = await admin
     .from('ai_actions')
-    .insert({ user_id: userId, chat_session_id: sessionId, message_id: userMessage.id, intent: 'pending', input_json: { message: payload.message }, idempotency_key: payload.idempotencyKey, status: 'received' })
+    .insert({ user_id: userId, chat_session_id: sessionId, intent: 'pending', input_json: { message: payload.message, message_id: userMessage.id }, idempotency_key: payload.idempotencyKey, status: 'received' })
     .select('id')
     .single();
   if (actionError) return response({ error: { code: 'ACTION_CREATION_FAILED' } }, 500);
@@ -154,14 +154,14 @@ Deno.serve(async (request) => {
     body: JSON.stringify({ model, input: [{ role: 'system', content: instruction }, { role: 'user', content: payload.message }], text: { format: { type: 'json_object' } } }),
   });
   if (!openAiResponse.ok) {
-    await admin.from('ai_actions').update({ status: 'failed', error_message: 'OPENAI_REQUEST_FAILED' }).eq('id', action.id);
+    await admin.from('ai_actions').update({ status: 'failed' }).eq('id', action.id);
     return response({ error: { code: 'AI_PROVIDER_UNAVAILABLE' } }, 502);
   }
 
   const modelResult = await openAiResponse.json() as { output_text?: string };
   let parsed: FinanceAction;
   try { parsed = parseModelPayload(modelResult.output_text ?? ''); } catch {
-    await admin.from('ai_actions').update({ status: 'failed', error_message: 'INVALID_AI_RESPONSE' }).eq('id', action.id);
+    await admin.from('ai_actions').update({ status: 'failed' }).eq('id', action.id);
     return response({ error: { code: 'INVALID_AI_RESPONSE' } }, 502);
   }
 
@@ -169,12 +169,12 @@ Deno.serve(async (request) => {
     const transactionId = await persistFinancialAction(admin, userId, parsed, payload.idempotencyKey);
     if (transactionId) parsed.savedTransactionId = transactionId;
   } catch (error) {
-    await admin.from('ai_actions').update({ status: 'failed', error_message: error instanceof Error ? error.message : 'PERSISTENCE_FAILED' }).eq('id', action.id);
+    await admin.from('ai_actions').update({ status: 'failed' }).eq('id', action.id);
     return response({ error: { code: 'ACTION_PERSISTENCE_FAILED' } }, 500);
   }
 
-  await admin.from('chat_messages').insert({ user_id: userId, chat_session_id: sessionId, role: 'assistant', content: parsed, structured_data: parsed, model_name: model });
-  await admin.from('ai_actions').update({ intent: parsed.intent, result_json: parsed, validated_payload: parsed, confidence: parsed.confidence, status: 'success', processed_at: new Date().toISOString() }).eq('id', action.id);
+  await admin.from('chat_messages').insert({ user_id: userId, chat_session_id: sessionId, role: 'assistant', content: parsed, model_name: model });
+  await admin.from('ai_actions').update({ intent: parsed.intent, result_json: parsed, status: 'processed', processed_at: new Date().toISOString() }).eq('id', action.id);
   await admin.from('chat_sessions').update({ last_message_at: new Date().toISOString() }).eq('id', sessionId);
 
   return response({ sessionId, action: parsed, replayed: false });
