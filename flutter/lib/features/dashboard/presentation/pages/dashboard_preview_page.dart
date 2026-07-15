@@ -1,117 +1,187 @@
+// ignore_for_file: deprecated_member_use, use_null_aware_elements
+
 import 'package:finance_ai/app/constants/app_breakpoints.dart';
 import 'package:finance_ai/app/theme/app_theme.dart';
 import 'package:finance_ai/features/chat_ai/presentation/chat_page.dart';
 import 'package:flutter/material.dart';
 
+enum FinancePage { dashboard, transactions, investments, crypto, cards, goals, reports, assistant, settings }
+enum EntryKind { income, expense }
+
+class FinanceEntry {
+  const FinanceEntry({required this.id, required this.description, required this.category, required this.amount, required this.kind, required this.date});
+  final String id;
+  final String description;
+  final String category;
+  final double amount;
+  final EntryKind kind;
+  final DateTime date;
+}
+
+class InvestmentItem {
+  const InvestmentItem({required this.name, required this.institution, required this.type, required this.amount, required this.yieldDescription});
+  final String name;
+  final String institution;
+  final String type;
+  final double amount;
+  final String yieldDescription;
+}
+
 class DashboardPreviewPage extends StatefulWidget {
   const DashboardPreviewPage({super.key});
-
-  @override
-  State<DashboardPreviewPage> createState() => _DashboardPreviewPageState();
+  @override State<DashboardPreviewPage> createState() => _DashboardPreviewPageState();
 }
 
 class _DashboardPreviewPageState extends State<DashboardPreviewPage> {
   bool _hideValues = false;
-  int _selectedIndex = 0;
+  bool _sidebarCollapsed = false;
+  FinancePage _page = FinancePage.dashboard;
+  final List<FinanceEntry> _entries = [];
+  final List<InvestmentItem> _investments = [];
+
+  void _go(FinancePage page) => setState(() => _page = page);
+  void _addEntry(FinanceEntry entry) => setState(() => _entries.insert(0, entry));
+  void _addInvestment(InvestmentItem item) => setState(() => _investments.insert(0, item));
+
+  Future<void> _showEntryForm({EntryKind kind = EntryKind.expense}) async {
+    final entry = await showModalBottomSheet<FinanceEntry>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _EntryForm(initialKind: kind),
+    );
+    if (entry == null || !mounted) return;
+    _addEntry(entry);
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(kind == EntryKind.expense ? 'Despesa adicionada' : 'Receita adicionada')));
+  }
+
+  Future<void> _showInvestmentForm() async {
+    final item = await showModalBottomSheet<InvestmentItem>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => const _InvestmentForm(),
+    );
+    if (item == null || !mounted) return;
+    _addInvestment(item);
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Investimento adicionado')));
+  }
 
   @override
   Widget build(BuildContext context) {
-    final width = MediaQuery.sizeOf(context).width;
-    final isDesktop = width >= AppBreakpoints.expanded;
-    final content = _selectedIndex == 0
-        ? _DashboardContent(hideValues: _hideValues, onToggleVisibility: () => setState(() => _hideValues = !_hideValues))
-        : _SectionPlaceholder(index: _selectedIndex, onBack: () => setState(() => _selectedIndex = 0));
-
+    final desktop = MediaQuery.sizeOf(context).width >= AppBreakpoints.expanded;
+    final content = switch (_page) {
+      FinancePage.dashboard => _DashboardContent(entries: _entries, investments: _investments, hideValues: _hideValues, onNavigate: _go, onAddEntry: _showEntryForm, onAddInvestment: _showInvestmentForm),
+      FinancePage.transactions => _TransactionsPage(entries: _entries, hideValues: _hideValues, onAdd: _showEntryForm),
+      FinancePage.investments => _InvestmentsPage(items: _investments, hideValues: _hideValues, onAdd: _showInvestmentForm),
+      FinancePage.assistant => ChatPage(onTransactionCreated: _addEntry, onInvestmentCreated: _addInvestment),
+      _ => _EmptyFeaturePage(page: _page, onNavigate: _go),
+    };
     return Scaffold(
-      drawer: isDesktop ? null : const _NavigationDrawer(),
-      appBar: AppBar(
-        title: const Text('Finance AI'),
-        actions: [IconButton(tooltip: _hideValues ? 'Mostrar valores' : 'Ocultar valores', icon: Icon(_hideValues ? Icons.visibility_off_outlined : Icons.visibility_outlined), onPressed: () => setState(() => _hideValues = !_hideValues))],
-      ),
-      body: Row(
-        children: [
-          if (isDesktop) _NavigationRail(selectedIndex: _selectedIndex, onSelected: (index) => setState(() => _selectedIndex = index)),
-          Expanded(
-            child: DecoratedBox(
-              decoration: const BoxDecoration(gradient: LinearGradient(colors: [AppColors.galaxyStart, AppColors.galaxyEnd], begin: Alignment.topLeft, end: Alignment.bottomRight)),
-              child: SafeArea(child: content),
-            ),
+      drawer: desktop ? null : Drawer(child: _SideNavigation(selected: _page, collapsed: false, onSelected: (page) { Navigator.pop(context); _go(page); }, onToggle: () {})),
+      appBar: _TopBar(page: _page, hideValues: _hideValues, onTogglePrivacy: () => setState(() => _hideValues = !_hideValues), onMenu: desktop ? null : () => Scaffold.of(context).openDrawer()),
+      body: Row(children: [
+        if (desktop) _SideNavigation(selected: _page, collapsed: _sidebarCollapsed, onSelected: _go, onToggle: () => setState(() => _sidebarCollapsed = !_sidebarCollapsed)),
+        Expanded(
+          child: DecoratedBox(
+            decoration: const BoxDecoration(gradient: LinearGradient(colors: [AppColors.galaxyStart, AppColors.galaxyEnd], begin: Alignment.topLeft, end: Alignment.bottomRight)),
+            child: SafeArea(top: false, child: Center(child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 1440), child: content))),
           ),
-        ],
-      ),
-      floatingActionButton: isDesktop ? null : FloatingActionButton.extended(onPressed: () => ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Formulário de movimentação em breve'))), icon: const Icon(Icons.add), label: const Text('Adicionar')),
+        ),
+      ]),
+      floatingActionButton: desktop ? null : FloatingActionButton.extended(onPressed: _showEntryForm, icon: const Icon(Icons.add), label: const Text('Movimentação')),
     );
   }
 }
 
+class _TopBar extends StatelessWidget implements PreferredSizeWidget {
+  const _TopBar({required this.page, required this.hideValues, required this.onTogglePrivacy, this.onMenu});
+  final FinancePage page;
+  final bool hideValues;
+  final VoidCallback onTogglePrivacy;
+  final VoidCallback? onMenu;
+  @override Size get preferredSize => const Size.fromHeight(64);
+  @override Widget build(BuildContext context) => AppBar(
+    leading: onMenu == null ? null : IconButton(icon: const Icon(Icons.menu), tooltip: 'Menu', onPressed: onMenu),
+    title: Text(_pageTitle(page)),
+    actions: [
+      IconButton(tooltip: hideValues ? 'Mostrar valores' : 'Ocultar valores', icon: Icon(hideValues ? Icons.visibility_off_outlined : Icons.visibility_outlined), onPressed: onTogglePrivacy),
+      const Padding(padding: EdgeInsets.only(right: 12), child: CircleAvatar(radius: 17, child: Text('MA'))),
+    ],
+  );
+}
+
+class _SideNavigation extends StatelessWidget {
+  const _SideNavigation({required this.selected, required this.collapsed, required this.onSelected, required this.onToggle});
+  final FinancePage selected;
+  final bool collapsed;
+  final ValueChanged<FinancePage> onSelected;
+  final VoidCallback onToggle;
+  @override Widget build(BuildContext context) {
+    const primary = [(FinancePage.dashboard, Icons.grid_view_rounded, 'Dashboard'), (FinancePage.transactions, Icons.receipt_long_outlined, 'Movimentações'), (FinancePage.investments, Icons.show_chart_rounded, 'Investimentos'), (FinancePage.crypto, Icons.currency_bitcoin, 'Criptomoedas'), (FinancePage.cards, Icons.credit_card_outlined, 'Cartões'), (FinancePage.goals, Icons.flag_outlined, 'Metas'), (FinancePage.reports, Icons.insights_outlined, 'Relatórios'), (FinancePage.assistant, Icons.auto_awesome_outlined, 'Assistente IA')];
+    return AnimatedContainer(
+      duration: AppAnimations.standard,
+      width: collapsed ? 78 : 248,
+      color: const Color(0xFF17141F),
+      child: Column(children: [
+        Padding(padding: const EdgeInsets.fromLTRB(18, 20, 12, 16), child: Row(children: [const Icon(Icons.auto_graph_rounded, color: AppColors.brand), if (!collapsed) const SizedBox(width: 10), if (!collapsed) const Expanded(child: Text('Finance AI', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700))), IconButton(onPressed: onToggle, tooltip: collapsed ? 'Expandir menu' : 'Recolher menu', icon: Icon(collapsed ? Icons.keyboard_double_arrow_right : Icons.keyboard_double_arrow_left))])),
+        Expanded(child: ListView(padding: const EdgeInsets.symmetric(horizontal: 10), children: [for (final item in primary) _NavItem(page: item.$1, icon: item.$2, label: item.$3, selected: selected == item.$1, collapsed: collapsed, onTap: () => onSelected(item.$1))])),
+        const Divider(height: 1),
+        Padding(padding: const EdgeInsets.all(10), child: _NavItem(page: FinancePage.settings, icon: Icons.settings_outlined, label: 'Configurações', selected: selected == FinancePage.settings, collapsed: collapsed, onTap: () => onSelected(FinancePage.settings))),
+      ]),
+    );
+  }
+}
+
+class _NavItem extends StatelessWidget {
+  const _NavItem({required this.page, required this.icon, required this.label, required this.selected, required this.collapsed, required this.onTap});
+  final FinancePage page; final IconData icon; final String label; final bool selected; final bool collapsed; final VoidCallback onTap;
+  @override Widget build(BuildContext context) => Tooltip(message: collapsed ? label : '', child: Padding(padding: const EdgeInsets.only(bottom: 5), child: Material(color: selected ? const Color(0xFF4C465B) : Colors.transparent, borderRadius: BorderRadius.circular(14), child: InkWell(onTap: onTap, borderRadius: BorderRadius.circular(14), child: Padding(padding: EdgeInsets.symmetric(horizontal: collapsed ? 17 : 14, vertical: 13), child: Row(children: [Icon(icon, size: 21), if (!collapsed) const SizedBox(width: 14), if (!collapsed) Expanded(child: Text(label, overflow: TextOverflow.ellipsis))]))))));
+}
+
 class _DashboardContent extends StatelessWidget {
-  const _DashboardContent({required this.hideValues, required this.onToggleVisibility});
-  final bool hideValues;
-  final VoidCallback onToggleVisibility;
-
-  @override
-  Widget build(BuildContext context) => LayoutBuilder(
-        builder: (context, constraints) {
-          final columns = constraints.maxWidth >= AppBreakpoints.expanded ? 4 : constraints.maxWidth >= AppBreakpoints.medium ? 2 : 1;
-          return ListView(
-            padding: const EdgeInsets.all(24),
-            children: [
-              Wrap(
-                alignment: WrapAlignment.spaceBetween,
-                crossAxisAlignment: WrapCrossAlignment.center,
-                spacing: 16,
-                runSpacing: 12,
-                children: [
-                  Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('Visão geral', style: Theme.of(context).textTheme.headlineMedium), const SizedBox(height: 4), Text('Acompanhe sua vida financeira em um só lugar.', style: Theme.of(context).textTheme.bodyLarge)]),
-                  const Chip(avatar: Icon(Icons.auto_awesome, size: 18), label: Text('Preview web')),
-                ],
-              ),
-              const SizedBox(height: 28),
-              _MetricGrid(columns: columns, hideValues: hideValues),
-              const SizedBox(height: 28),
-              _PreviewPanel(title: 'Resumo do mês', child: Row(children: [Expanded(child: _SummaryRow(label: 'Receitas', color: AppColors.positive, value: hideValues ? 'R\$ ••••••' : 'R\$ 0,00')), Expanded(child: _SummaryRow(label: 'Despesas', color: AppColors.negative, value: hideValues ? 'R\$ ••••••' : 'R\$ 0,00')), Expanded(child: _SummaryRow(label: 'Resultado', color: AppColors.brand, value: hideValues ? 'R\$ ••••••' : 'R\$ 0,00'))])),
-              const SizedBox(height: 20),
-              _PreviewPanel(title: 'Comece por aqui', child: Wrap(spacing: 12, runSpacing: 12, children: const [_QuickAction(icon: Icons.remove_circle_outline, label: 'Adicionar despesa'), _QuickAction(icon: Icons.add_circle_outline, label: 'Adicionar receita'), _QuickAction(icon: Icons.trending_up, label: 'Adicionar investimento'), _QuickAction(icon: Icons.chat_bubble_outline, label: 'Abrir assistente')])),
-              const SizedBox(height: 20),
-              const _PreviewPanel(title: 'Últimas movimentações', child: _EmptyState(icon: Icons.receipt_long_outlined, text: 'Nenhuma movimentação ainda.\nQuando conectar sua conta, seus lançamentos aparecerão aqui.')),
-            ],
-          );
-        },
-      );
-}
-
-class _MetricGrid extends StatelessWidget {
-  const _MetricGrid({required this.columns, required this.hideValues});
-  final int columns;
-  final bool hideValues;
-  @override
-  Widget build(BuildContext context) {
-    const metrics = [(Icons.account_balance_wallet_outlined, 'Saldo atual'), (Icons.pie_chart_outline, 'Patrimônio'), (Icons.arrow_downward, 'Receitas'), (Icons.arrow_upward, 'Despesas')];
-    return GridView.builder(shrinkWrap: true, physics: const NeverScrollableScrollPhysics(), itemCount: metrics.length, gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: columns, mainAxisSpacing: 12, crossAxisSpacing: 12, childAspectRatio: columns == 1 ? 3.2 : 1.7), itemBuilder: (context, index) { final metric = metrics[index]; return Card(child: Padding(padding: const EdgeInsets.all(18), child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Icon(metric.$1, color: Theme.of(context).colorScheme.primary), Text(metric.$2), Text(hideValues ? 'R\$ ••••••' : 'R\$ 0,00', style: Theme.of(context).textTheme.headlineSmall)]))); });
+  const _DashboardContent({required this.entries, required this.investments, required this.hideValues, required this.onNavigate, required this.onAddEntry, required this.onAddInvestment});
+  final List<FinanceEntry> entries; final List<InvestmentItem> investments; final bool hideValues; final ValueChanged<FinancePage> onNavigate; final Future<void> Function({EntryKind kind}) onAddEntry; final Future<void> Function() onAddInvestment;
+  @override Widget build(BuildContext context) {
+    final income = entries.where((item) => item.kind == EntryKind.income).fold(0.0, (sum, item) => sum + item.amount);
+    final expense = entries.where((item) => item.kind == EntryKind.expense).fold(0.0, (sum, item) => sum + item.amount);
+    final investmentsTotal = investments.fold(0.0, (sum, item) => sum + item.amount);
+    return ListView(padding: const EdgeInsets.all(28), children: [
+      const _PageHeader(title: 'Visão geral', subtitle: 'Controle suas decisões financeiras em um só lugar.'),
+      const SizedBox(height: 24),
+      _HeroCard(value: income - expense + investmentsTotal, hideValues: hideValues, onAssistant: () => onNavigate(FinancePage.assistant)),
+      const SizedBox(height: 18),
+      LayoutBuilder(builder: (context, box) { final columns = box.maxWidth >= 900 ? 3 : 1; return GridView.count(crossAxisCount: columns, childAspectRatio: columns == 1 ? 3.8 : 2.1, shrinkWrap: true, physics: const NeverScrollableScrollPhysics(), crossAxisSpacing: 14, mainAxisSpacing: 14, children: [_MetricCard(label: 'Saldo disponível', icon: Icons.account_balance_wallet_outlined, value: income - expense, color: AppColors.brand, hideValues: hideValues), _MetricCard(label: 'Resultado do mês', icon: Icons.trending_up_rounded, value: income - expense, color: income >= expense ? AppColors.positive : AppColors.negative, hideValues: hideValues), _MetricCard(label: 'Investido', icon: Icons.pie_chart_outline_rounded, value: investmentsTotal, color: const Color(0xFF60A5FA), hideValues: hideValues)]); }),
+      const SizedBox(height: 26),
+      _Panel(title: 'Comece por aqui', child: Wrap(spacing: 10, runSpacing: 10, children: [OutlinedButton.icon(onPressed: () => onAddEntry(kind: EntryKind.expense), icon: const Icon(Icons.remove_circle_outline), label: const Text('Adicionar despesa')), OutlinedButton.icon(onPressed: () => onAddEntry(kind: EntryKind.income), icon: const Icon(Icons.add_circle_outline), label: const Text('Adicionar receita')), OutlinedButton.icon(onPressed: onAddInvestment, icon: const Icon(Icons.show_chart_rounded), label: const Text('Adicionar investimento')), FilledButton.icon(onPressed: () => onNavigate(FinancePage.assistant), icon: const Icon(Icons.auto_awesome), label: const Text('Usar assistente IA'))])),
+      const SizedBox(height: 18),
+      _Panel(title: 'Últimas movimentações', action: TextButton(onPressed: () => onNavigate(FinancePage.transactions), child: const Text('Ver todas')), child: entries.isEmpty ? const _HelpfulEmpty(icon: Icons.receipt_long_outlined, title: 'Sua linha do tempo começa aqui', text: 'Registre uma receita ou despesa para visualizar seu resumo mensal.') : Column(children: entries.take(5).map((entry) => _EntryRow(entry: entry, hideValues: hideValues)).toList())),
+    ]);
   }
 }
 
-class _PreviewPanel extends StatelessWidget { const _PreviewPanel({required this.title, required this.child}); final String title; final Widget child; @override Widget build(BuildContext context) => Card(child: Padding(padding: const EdgeInsets.all(20), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(title, style: Theme.of(context).textTheme.titleLarge), const SizedBox(height: 18), child]))); }
-class _SummaryRow extends StatelessWidget { const _SummaryRow({required this.label, required this.color, required this.value}); final String label, value; final Color color; @override Widget build(BuildContext context) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(label), const SizedBox(height: 8), Text(value, style: Theme.of(context).textTheme.titleLarge?.copyWith(color: color))]); }
-class _QuickAction extends StatelessWidget { const _QuickAction({required this.icon, required this.label}); final IconData icon; final String label; @override Widget build(BuildContext context) => OutlinedButton.icon(onPressed: () => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$label selecionado'))), icon: Icon(icon), label: Text(label)); }
-class _EmptyState extends StatelessWidget { const _EmptyState({required this.icon, required this.text}); final IconData icon; final String text; @override Widget build(BuildContext context) => Center(child: Padding(padding: const EdgeInsets.all(28), child: Column(children: [Icon(icon, size: 44), const SizedBox(height: 12), Text(text, textAlign: TextAlign.center)]))); }
-class _NavigationRail extends StatelessWidget { const _NavigationRail({required this.selectedIndex, required this.onSelected}); final int selectedIndex; final ValueChanged<int> onSelected; @override Widget build(BuildContext context) => NavigationRail(selectedIndex: selectedIndex, onDestinationSelected: onSelected, labelType: NavigationRailLabelType.all, destinations: const [NavigationRailDestination(icon: Icon(Icons.grid_view_outlined), selectedIcon: Icon(Icons.grid_view), label: Text('Início')), NavigationRailDestination(icon: Icon(Icons.receipt_long_outlined), label: Text('Transações')), NavigationRailDestination(icon: Icon(Icons.trending_up), label: Text('Investimentos')), NavigationRailDestination(icon: Icon(Icons.chat_bubble_outline), label: Text('Assistente')), NavigationRailDestination(icon: Icon(Icons.settings_outlined), label: Text('Ajustes'))]); }
-class _SectionPlaceholder extends StatelessWidget {
-  const _SectionPlaceholder({required this.index, required this.onBack});
-  final int index;
-  final VoidCallback onBack;
-
-  @override
-  Widget build(BuildContext context) {
-    if (index == 3) return const ChatPage();
-    const sections = [
-      ('Transações', Icons.receipt_long_outlined, 'Registre receitas, despesas, transferências e reembolsos.'),
-      ('Investimentos', Icons.trending_up, 'Acompanhe CDB, renda fixa e sua evolução patrimonial.'),
-      ('Assistente Financeiro', Icons.auto_awesome, 'Converse com a IA para registrar e consultar sua vida financeira.'),
-      ('Ajustes', Icons.settings_outlined, 'Personalize moeda, privacidade e preferências.'),
-    ];
-    final section = sections[index - 1];
-    return Center(child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 520), child: Card(child: Padding(padding: const EdgeInsets.all(32), child: Column(mainAxisSize: MainAxisSize.min, children: [Icon(section.$2, size: 56, color: AppColors.brand), const SizedBox(height: 18), Text(section.$1, style: Theme.of(context).textTheme.headlineSmall), const SizedBox(height: 12), Text(section.$3, textAlign: TextAlign.center), const SizedBox(height: 24), FilledButton.icon(onPressed: onBack, icon: const Icon(Icons.arrow_back), label: const Text('Voltar ao Dashboard'))])))));
-  }
+class _TransactionsPage extends StatefulWidget { const _TransactionsPage({required this.entries, required this.hideValues, required this.onAdd}); final List<FinanceEntry> entries; final bool hideValues; final Future<void> Function({EntryKind kind}) onAdd; @override State<_TransactionsPage> createState() => _TransactionsPageState(); }
+class _TransactionsPageState extends State<_TransactionsPage> {
+  String _query = ''; EntryKind? _filter;
+  @override Widget build(BuildContext context) { final items = widget.entries.where((entry) => (_filter == null || entry.kind == _filter) && ('${entry.description} ${entry.category}').toLowerCase().contains(_query.toLowerCase())).toList(); return ListView(padding: const EdgeInsets.all(28), children: [_PageHeader(title: 'Movimentações', subtitle: 'Receitas e despesas em uma única linha do tempo.', action: FilledButton.icon(onPressed: () => widget.onAdd(kind: EntryKind.expense), icon: const Icon(Icons.add), label: const Text('Nova movimentação'))), const SizedBox(height: 22), _Panel(title: 'Filtros', child: Wrap(spacing: 12, runSpacing: 10, children: [SizedBox(width: 290, child: TextField(onChanged: (value) => setState(() => _query = value), decoration: const InputDecoration(prefixIcon: Icon(Icons.search), hintText: 'Buscar descrição ou categoria'))), ChoiceChip(label: const Text('Todas'), selected: _filter == null, onSelected: (_) => setState(() => _filter = null)), ChoiceChip(label: const Text('Receitas'), selected: _filter == EntryKind.income, onSelected: (_) => setState(() => _filter = EntryKind.income)), ChoiceChip(label: const Text('Despesas'), selected: _filter == EntryKind.expense, onSelected: (_) => setState(() => _filter = EntryKind.expense))])), const SizedBox(height: 18), _Panel(title: '${items.length} movimentação(ões)', child: items.isEmpty ? _HelpfulEmpty(icon: Icons.filter_alt_off_outlined, title: 'Nada por aqui ainda', text: 'Ajuste seus filtros ou adicione uma movimentação.', action: FilledButton(onPressed: () => widget.onAdd(kind: EntryKind.expense), child: const Text('Adicionar despesa'))) : Column(children: items.map((entry) => _EntryRow(entry: entry, hideValues: widget.hideValues, detailed: true)).toList()))]); }
 }
-class _NavigationDrawer extends StatelessWidget { const _NavigationDrawer(); @override Widget build(BuildContext context) => const NavigationDrawer(children: [DrawerHeader(child: Text('Finance AI')), NavigationDrawerDestination(icon: Icon(Icons.grid_view_outlined), label: Text('Início')), NavigationDrawerDestination(icon: Icon(Icons.receipt_long_outlined), label: Text('Transações')), NavigationDrawerDestination(icon: Icon(Icons.settings_outlined), label: Text('Ajustes'))]); }
+
+class _InvestmentsPage extends StatelessWidget { const _InvestmentsPage({required this.items, required this.hideValues, required this.onAdd}); final List<InvestmentItem> items; final bool hideValues; final Future<void> Function() onAdd; @override Widget build(BuildContext context) { final total = items.fold(0.0, (sum, item) => sum + item.amount); return ListView(padding: const EdgeInsets.all(28), children: [_PageHeader(title: 'Investimentos', subtitle: 'Acompanhe patrimônio, renda fixa e evolução.', action: FilledButton.icon(onPressed: onAdd, icon: const Icon(Icons.add), label: const Text('Adicionar investimento'))), const SizedBox(height: 22), _HeroCard(value: total, hideValues: hideValues, label: 'Total investido', onAssistant: onAdd), const SizedBox(height: 18), _Panel(title: 'Sua carteira', child: items.isEmpty ? _HelpfulEmpty(icon: Icons.show_chart_rounded, title: 'Comece sua carteira', text: 'Adicione um CDB, ação, ETF ou outro investimento para acompanhar o patrimônio.', action: FilledButton.icon(onPressed: onAdd, icon: const Icon(Icons.add), label: const Text('Adicionar investimento'))) : Column(children: items.map((item) => ListTile(contentPadding: const EdgeInsets.symmetric(vertical: 6), leading: CircleAvatar(backgroundColor: const Color(0xFF173C6B), child: const Icon(Icons.show_chart_rounded)), title: Text(item.name), subtitle: Text('${item.type} · ${item.institution} · ${item.yieldDescription}'), trailing: _FinancialValue(value: item.amount, hidden: hideValues, style: Theme.of(context).textTheme.titleMedium))).toList()))]); } }
+
+class _EmptyFeaturePage extends StatelessWidget { const _EmptyFeaturePage({required this.page, required this.onNavigate}); final FinancePage page; final ValueChanged<FinancePage> onNavigate; @override Widget build(BuildContext context) { final data = switch(page) { FinancePage.crypto => (Icons.currency_bitcoin, 'Criptomoedas', 'Registre sua primeira compra de cripto pelo Assistente IA.'), FinancePage.cards => (Icons.credit_card_outlined, 'Cartões', 'Adicione seu cartão para acompanhar limite e fatura.'), FinancePage.goals => (Icons.flag_outlined, 'Metas', 'Defina uma meta financeira e acompanhe seu progresso.'), FinancePage.reports => (Icons.insights_outlined, 'Relatórios', 'Registre movimentações para gerar análises do período.'), _ => (Icons.settings_outlined, 'Configurações', 'Personalize sua experiência e preferências.'), }; return Center(child: _Panel(title: data.$2, child: _HelpfulEmpty(icon: data.$1, title: 'Em preparação', text: data.$3, action: FilledButton.icon(onPressed: () => onNavigate(FinancePage.assistant), icon: const Icon(Icons.auto_awesome), label: const Text('Abrir Assistente IA'))))); } }
+
+class _PageHeader extends StatelessWidget { const _PageHeader({required this.title, required this.subtitle, this.action}); final String title, subtitle; final Widget? action; @override Widget build(BuildContext context) => Wrap(alignment: WrapAlignment.spaceBetween, crossAxisAlignment: WrapCrossAlignment.center, spacing: 16, runSpacing: 12, children: [Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(title, style: Theme.of(context).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.w700)), const SizedBox(height: 5), Text(subtitle, style: Theme.of(context).textTheme.bodyLarge?.copyWith(color: Colors.white70))]), if (action != null) action!]); }
+class _Panel extends StatelessWidget { const _Panel({required this.title, required this.child, this.action}); final String title; final Widget child; final Widget? action; @override Widget build(BuildContext context) => Card(color: const Color(0xCC1B1722), child: Padding(padding: const EdgeInsets.all(22), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Row(children: [Expanded(child: Text(title, style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w600))), if (action != null) action!]), const SizedBox(height: 16), child]))); }
+class _HeroCard extends StatelessWidget { const _HeroCard({required this.value, required this.hideValues, required this.onAssistant, this.label = 'Patrimônio total'}); final double value; final bool hideValues; final VoidCallback onAssistant; final String label; @override Widget build(BuildContext context) => Container(padding: const EdgeInsets.all(28), decoration: BoxDecoration(borderRadius: BorderRadius.circular(24), gradient: const LinearGradient(colors: [Color(0xFF41247D), Color(0xFF112E63)]), boxShadow: AppShadows.card), child: Wrap(alignment: WrapAlignment.spaceBetween, crossAxisAlignment: WrapCrossAlignment.end, spacing: 20, runSpacing: 20, children: [Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(label, style: Theme.of(context).textTheme.titleMedium?.copyWith(color: Colors.white70)), const SizedBox(height: 10), _FinancialValue(value: value, hidden: hideValues, style: Theme.of(context).textTheme.displaySmall?.copyWith(fontWeight: FontWeight.w800)), const SizedBox(height: 8), const Text('Atualizado agora · período atual', style: TextStyle(color: Colors.white70))]), OutlinedButton.icon(onPressed: onAssistant, style: OutlinedButton.styleFrom(foregroundColor: Colors.white), icon: const Icon(Icons.auto_awesome), label: const Text('Perguntar à IA'))])); }
+class _MetricCard extends StatelessWidget { const _MetricCard({required this.label, required this.icon, required this.value, required this.color, required this.hideValues}); final String label; final IconData icon; final double value; final Color color; final bool hideValues; @override Widget build(BuildContext context) => Card(color: const Color(0xD91B1722), child: Padding(padding: const EdgeInsets.all(20), child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Icon(icon, color: color), Text(label, style: const TextStyle(color: Colors.white70)), _FinancialValue(value: value, hidden: hideValues, style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w700))]))); }
+class _EntryRow extends StatelessWidget { const _EntryRow({required this.entry, required this.hideValues, this.detailed = false}); final FinanceEntry entry; final bool hideValues; final bool detailed; @override Widget build(BuildContext context) { final expense = entry.kind == EntryKind.expense; return ListTile(contentPadding: const EdgeInsets.symmetric(vertical: 5), leading: CircleAvatar(backgroundColor: expense ? const Color(0xFF4A202D) : const Color(0xFF153D35), child: Icon(expense ? Icons.arrow_upward : Icons.arrow_downward, color: expense ? AppColors.negative : AppColors.positive)), title: Text(entry.description), subtitle: Text(detailed ? '${entry.category} · ${_date(entry.date)} · Conta principal' : '${entry.category} · ${_date(entry.date)}'), trailing: _FinancialValue(value: entry.amount, hidden: hideValues, negative: expense, style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700))); } }
+class _FinancialValue extends StatelessWidget { const _FinancialValue({required this.value, required this.hidden, required this.style, this.negative = false}); final double value; final bool hidden, negative; final TextStyle? style; @override Widget build(BuildContext context) => Text(hidden ? 'R\$ ••••••' : '${negative ? '-' : ''}R\$ ${value.toStringAsFixed(2).replaceAll('.', ',')}', style: style?.copyWith(color: negative ? AppColors.negative : style?.color), textAlign: TextAlign.right); }
+class _HelpfulEmpty extends StatelessWidget { const _HelpfulEmpty({required this.icon, required this.title, required this.text, this.action}); final IconData icon; final String title, text; final Widget? action; @override Widget build(BuildContext context) => Center(child: Padding(padding: const EdgeInsets.all(26), child: Column(mainAxisSize: MainAxisSize.min, children: [Icon(icon, size: 46, color: AppColors.brand), const SizedBox(height: 14), Text(title, style: Theme.of(context).textTheme.titleLarge), const SizedBox(height: 8), Text(text, textAlign: TextAlign.center, style: const TextStyle(color: Colors.white70)), if (action != null) ...[const SizedBox(height: 18), action!]]))); }
+
+class _EntryForm extends StatefulWidget { const _EntryForm({required this.initialKind}); final EntryKind initialKind; @override State<_EntryForm> createState() => _EntryFormState(); }
+class _EntryFormState extends State<_EntryForm> { final amount = TextEditingController(); final description = TextEditingController(); final category = TextEditingController(); late EntryKind kind; @override void initState(){super.initState();kind=widget.initialKind;} @override void dispose(){amount.dispose();description.dispose();category.dispose();super.dispose();} void save(){final value=double.tryParse(amount.text.replaceAll(',', '.')); if(value == null || value <= 0 || description.text.trim().isEmpty){ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Informe valor e descrição válidos.')));return;} Navigator.pop(context, FinanceEntry(id: DateTime.now().microsecondsSinceEpoch.toString(), description: description.text.trim(), category: category.text.trim().isEmpty ? (kind == EntryKind.expense ? 'Outros' : 'Receitas') : category.text.trim(), amount: value, kind: kind, date: DateTime.now()));} @override Widget build(BuildContext context)=>_FormSheet(title: kind == EntryKind.expense ? 'Nova despesa' : 'Nova receita', child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children:[SegmentedButton<EntryKind>(segments: const [ButtonSegment(value: EntryKind.expense,label: Text('Despesa'),icon: Icon(Icons.arrow_upward)),ButtonSegment(value: EntryKind.income,label: Text('Receita'),icon: Icon(Icons.arrow_downward))],selected:{kind},onSelectionChanged:(value)=>setState(()=>kind=value.first)),const SizedBox(height:16),TextField(controller:amount,keyboardType:const TextInputType.numberWithOptions(decimal:true),decoration:const InputDecoration(labelText:'Valor',prefixText:'R\$ ')),const SizedBox(height:12),TextField(controller:description,decoration:const InputDecoration(labelText:'Descrição',hintText:'Ex.: Mercado do bairro')),const SizedBox(height:12),TextField(controller:category,decoration:const InputDecoration(labelText:'Categoria',hintText:'Ex.: Alimentação')),const SizedBox(height:24),FilledButton(onPressed:save,child:const Text('Salvar movimentação'))])); }
+class _InvestmentForm extends StatefulWidget { const _InvestmentForm(); @override State<_InvestmentForm> createState()=>_InvestmentFormState(); }
+class _InvestmentFormState extends State<_InvestmentForm>{final name=TextEditingController();final institution=TextEditingController();final amount=TextEditingController();String type='CDB';@override void dispose(){name.dispose();institution.dispose();amount.dispose();super.dispose();}void save(){final value=double.tryParse(amount.text.replaceAll(',','.'));if(value==null||value<=0||name.text.trim().isEmpty){ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Informe nome e valor válidos.')));return;}Navigator.pop(context,InvestmentItem(name:name.text.trim(),institution:institution.text.trim().isEmpty?'Instituição não informada':institution.text.trim(),type:type,amount:value,yieldDescription:type=='CDB'?'100% do CDI':'Em acompanhamento'));}@override Widget build(BuildContext context)=>_FormSheet(title:'Novo investimento',child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[DropdownButtonFormField(value:type,items:const [DropdownMenuItem(value:'CDB',child:Text('CDB')),DropdownMenuItem(value:'Ação',child:Text('Ação')),DropdownMenuItem(value:'ETF',child:Text('ETF')),DropdownMenuItem(value:'FII',child:Text('FII'))],onChanged:(value)=>setState(()=>type=value!),decoration:const InputDecoration(labelText:'Tipo')),const SizedBox(height:12),TextField(controller:name,decoration:const InputDecoration(labelText:'Nome',hintText:'Ex.: CDB Liquidez Diária')),const SizedBox(height:12),TextField(controller:institution,decoration:const InputDecoration(labelText:'Instituição')),const SizedBox(height:12),TextField(controller:amount,keyboardType:const TextInputType.numberWithOptions(decimal:true),decoration:const InputDecoration(labelText:'Valor investido',prefixText:'R\$ ')),const SizedBox(height:24),FilledButton(onPressed:save,child:const Text('Salvar investimento'))]));}
+class _FormSheet extends StatelessWidget { const _FormSheet({required this.title,required this.child});final String title;final Widget child;@override Widget build(BuildContext context)=>SafeArea(child:Align(alignment:Alignment.bottomCenter,child:ConstrainedBox(constraints:const BoxConstraints(maxWidth:620),child:Material(color:const Color(0xFF211C29),borderRadius:const BorderRadius.vertical(top:Radius.circular(28)),child:Padding(padding:EdgeInsets.fromLTRB(24,24,24,24+MediaQuery.viewInsetsOf(context).bottom),child:SingleChildScrollView(child:Column(mainAxisSize:MainAxisSize.min,crossAxisAlignment:CrossAxisAlignment.start,children:[Text(title,style:Theme.of(context).textTheme.headlineSmall),const SizedBox(height:20),child])))))));}
+String _date(DateTime value) => '${value.day.toString().padLeft(2, '0')}/${value.month.toString().padLeft(2, '0')}';
+String _pageTitle(FinancePage page) => switch(page){FinancePage.dashboard=>'Finance AI',FinancePage.transactions=>'Movimentações',FinancePage.investments=>'Investimentos',FinancePage.crypto=>'Criptomoedas',FinancePage.cards=>'Cartões',FinancePage.goals=>'Metas',FinancePage.reports=>'Relatórios',FinancePage.assistant=>'Assistente IA',FinancePage.settings=>'Configurações'};

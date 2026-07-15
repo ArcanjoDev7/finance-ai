@@ -16,6 +16,7 @@ type FinanceAction = {
   bank?: string;
   wallet?: string;
   confidence: number;
+  savedTransactionId?: string;
 };
 
 const jsonHeaders = { ...corsHeaders, 'Content-Type': 'application/json; charset=utf-8' };
@@ -39,6 +40,48 @@ function parseModelPayload(content: string): FinanceAction {
     intent: candidate.intent.trim(),
     confidence: typeof candidate.confidence === 'number' ? candidate.confidence : 0,
   } as FinanceAction;
+}
+
+function transactionTypeFor(intent: string) {
+  switch (intent) {
+    case 'create_expense': return 'expense';
+    case 'create_income': return 'income';
+    case 'create_investment': return 'investment';
+    case 'create_crypto_purchase': return 'crypto_buy';
+    default: return null;
+  }
+}
+
+async function persistFinancialAction(admin: ReturnType<typeof createClient>, userId: string, action: FinanceAction, idempotencyKey: string) {
+  const transactionType = transactionTypeFor(action.intent);
+  if (!transactionType || !action.amount || action.amount <= 0) return null;
+
+  let { data: wallet } = await admin.from('wallets').select('id').eq('user_id', userId).eq('is_archived', false).order('created_at').limit(1).maybeSingle();
+  if (!wallet) {
+    const { data, error } = await admin.from('wallets').insert({ user_id: userId, name: 'Carteira principal', currency_code: action.currency ?? 'BRL' }).select('id').single();
+    if (error) throw new Error('WALLET_CREATION_FAILED');
+    wallet = data;
+  }
+  let { data: account } = await admin.from('accounts').select('id').eq('user_id', userId).eq('wallet_id', wallet.id).order('created_at').limit(1).maybeSingle();
+  if (!account) {
+    const { data, error } = await admin.from('accounts').insert({ user_id: userId, wallet_id: wallet.id, name: 'Conta principal', account_type: transactionType === 'crypto_buy' ? 'crypto_wallet' : transactionType === 'investment' ? 'brokerage' : 'checking', currency_code: action.currency ?? 'BRL' }).select('id').single();
+    if (error) throw new Error('ACCOUNT_CREATION_FAILED');
+    account = data;
+  }
+  const { data: transaction, error } = await admin.from('transactions').insert({
+    user_id: userId,
+    wallet_id: wallet.id,
+    account_id: account.id,
+    amount_minor: Math.round(action.amount * 100),
+    currency_code: action.currency ?? 'BRL',
+    description: action.description ?? action.investment ?? action.intent,
+    transaction_type: transactionType,
+    occurred_at: action.date ? `${action.date}T12:00:00.000Z` : new Date().toISOString(),
+    idempotency_key: idempotencyKey,
+    metadata: { source: 'ai', category: action.category, investment: action.investment, quantity: action.quantity },
+  }).select('id').single();
+  if (error) throw new Error('TRANSACTION_CREATION_FAILED');
+  return transaction.id as string;
 }
 
 Deno.serve(async (request) => {
@@ -116,6 +159,14 @@ Deno.serve(async (request) => {
   try { parsed = parseModelPayload(modelResult.output_text ?? ''); } catch {
     await admin.from('ai_actions').update({ status: 'failed', error_message: 'INVALID_AI_RESPONSE' }).eq('id', action.id);
     return response({ error: { code: 'INVALID_AI_RESPONSE' } }, 502);
+  }
+
+  try {
+    const transactionId = await persistFinancialAction(admin, userId, parsed, payload.idempotencyKey);
+    if (transactionId) parsed.savedTransactionId = transactionId;
+  } catch (error) {
+    await admin.from('ai_actions').update({ status: 'failed', error_message: error instanceof Error ? error.message : 'PERSISTENCE_FAILED' }).eq('id', action.id);
+    return response({ error: { code: 'ACTION_PERSISTENCE_FAILED' } }, 500);
   }
 
   await admin.from('chat_messages').insert({ user_id: userId, chat_session_id: sessionId, role: 'assistant', content: parsed, structured_data: parsed, model_name: model });
