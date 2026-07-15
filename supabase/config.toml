@@ -50,6 +50,9 @@ file_size_limit = "10MiB"
 [functions.health]
 verify_jwt = false
 
+[functions.chat]
+verify_jwt = true
+
 [functions.download]
 verify_jwt = false
 
