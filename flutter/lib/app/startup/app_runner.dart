@@ -1,3 +1,5 @@
+import 'dart:ui';
+
 import 'package:finance_ai/app/app.dart';
 import 'package:finance_ai/app/environment/app_environment.dart';
 import 'package:finance_ai/app/startup/supabase_bootstrap.dart';
