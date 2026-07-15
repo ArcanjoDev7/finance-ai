@@ -8,6 +8,11 @@ class AuthResult {
   final bool requiresEmailConfirmation;
 }
 
+class AiRequestException implements Exception {
+  const AiRequestException(this.code);
+  final String code;
+}
+
 class SupabaseWebClient {
   SupabaseWebClient._();
   static final instance = SupabaseWebClient._();
@@ -53,11 +58,18 @@ class SupabaseWebClient {
 
   Future<Map<String, dynamic>> chat(String token, Map<String, dynamic> body) async {
     final config = _config;
-    final response = await _dio.post<Map<String, dynamic>>(
-      '${config.supabaseUrl}/functions/v1/chat',
-      data: body,
-      options: Options(headers: {'apikey': config.supabasePublishableKey, 'Authorization': 'Bearer $token'}),
-    );
-    return response.data ?? const {};
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '${config.supabaseUrl}/functions/v1/chat',
+        data: body,
+        options: Options(headers: {'apikey': config.supabasePublishableKey, 'Authorization': 'Bearer $token'}),
+      );
+      return response.data ?? const {};
+    } on DioException catch (error) {
+      final data = error.response?.data;
+      final errorData = data is Map ? data['error'] : null;
+      final code = errorData is Map ? errorData['code'] : null;
+      throw AiRequestException(code is String ? code : 'AI_REQUEST_FAILED');
+    }
   }
 }

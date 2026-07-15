@@ -40,7 +40,8 @@ class _ChatPageState extends State<ChatPage> {
       final action = _token == null ? _parse(text) : Map<String, dynamic>.from((await SupabaseWebClient.instance.chat(_token!, {'message': text, 'idempotencyKey': _key()}))['action'] as Map? ?? const {});
       _apply(action);
       if (mounted) setState(() => _messages.add(_Message(_response(action), action: action)));
-    } catch (_) { if (mounted) setState(() => _messages.add(const _Message('Não consegui processar esse comando. Tente novamente.'))); }
+    } on AiRequestException catch (error) { if (mounted) setState(() => _messages.add(_Message(_aiErrorMessage(error.code)))); }
+    catch (_) { if (mounted) setState(() => _messages.add(const _Message('Não consegui processar esse comando. Tente novamente.'))); }
     finally { if (mounted) setState(() => _sending = false); }
   }
 
@@ -55,6 +56,7 @@ class _ChatPageState extends State<ChatPage> {
 
   void _apply(Map<String, dynamic> action) { final amount = (action['amount'] as num?)?.toDouble(); if (amount == null || amount <= 0) return; final id = _key(); switch (action['intent']) { case 'create_expense': widget.onTransactionCreated(FinanceEntry(id: id, description: '${action['description'] ?? 'Despesa'}', category: '${action['category'] ?? 'Outros'}', amount: amount, kind: EntryKind.expense, date: DateTime.now())); return; case 'create_income': widget.onTransactionCreated(FinanceEntry(id: id, description: '${action['description'] ?? 'Receita'}', category: '${action['category'] ?? 'Receitas'}', amount: amount, kind: EntryKind.income, date: DateTime.now())); return; case 'create_investment': widget.onInvestmentCreated(InvestmentItem(name: '${action['investment'] ?? 'Investimento'}', institution: '${action['bank'] ?? 'Carteira principal'}', type: 'Renda fixa', amount: amount, yieldDescription: 'Registrado pela IA')); return; case 'create_crypto_purchase': widget.onInvestmentCreated(InvestmentItem(name: '${action['investment'] ?? 'Bitcoin'}', institution: 'Carteira de cripto', type: 'Criptomoeda', amount: amount, yieldDescription: 'Registrado pela IA')); return; default: return; } }
   String _response(Map<String, dynamic> action) => switch (action['intent']) {'create_expense' => 'Despesa adicionada.', 'create_income' => 'Receita adicionada.', 'create_investment' => 'Investimento adicionado.', 'create_crypto_purchase' => 'Compra de cripto registrada.', _ => 'Faça login para consultar dados sincronizados. Sem login, você pode testar lançamentos na sessão atual.'};
+  String _aiErrorMessage(String code) => switch (code) { 'AI_CONFIGURATION_REQUIRED' => 'A IA ainda não está configurada no Supabase. Falta validar a chave ou o modelo da OpenAI.', 'AI_PROVIDER_UNAVAILABLE' => 'A OpenAI recusou a solicitação. Verifique a chave, o modelo configurado e os créditos da conta OpenAI.', 'ACTION_PERSISTENCE_FAILED' => 'A IA entendeu o comando, mas não conseguiu salvar o lançamento no banco. A função precisa ser publicada com a atualização atual.', 'UNAUTHORIZED' => 'Sua sessão expirou. Saia e entre novamente.', _ => 'A IA não concluiu o comando ($code).'};
   String _key() { final value = DateTime.now().microsecondsSinceEpoch.toRadixString(16).padLeft(12, '0'); return '00000000-0000-4000-8000-$value'; }
 
   @override Widget build(BuildContext context) => Column(children: [
