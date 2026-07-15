@@ -11,13 +11,7 @@ class AuthGate extends StatelessWidget {
     if (!AppEnvironmentConfig.fromBuild().hasSupabaseConfiguration) {
       return const _ConfigurationRequiredPage();
     }
-    return StreamBuilder<AuthState>(
-      stream: Supabase.instance.client.auth.onAuthStateChange,
-      builder: (context, snapshot) {
-        final session = snapshot.data?.session ?? Supabase.instance.client.auth.currentSession;
-        return session == null ? const _SignInPage() : const DashboardPreviewPage();
-      },
-    );
+    return const _SignInPage();
   }
 }
 
@@ -59,6 +53,9 @@ class _SignInPageState extends State<_SignInPage> {
         if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Confira seu e-mail para confirmar a conta.')));
       } else {
         await Supabase.instance.client.auth.signInWithPassword(email: _email.text.trim(), password: _password.text);
+        if (mounted) {
+          await Navigator.of(context).pushReplacement(MaterialPageRoute<void>(builder: (_) => const DashboardPreviewPage()));
+        }
       }
     } on AuthException catch (error) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error.message)));
