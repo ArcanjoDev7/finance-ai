@@ -11,12 +11,15 @@ class DashboardPreviewPage extends StatefulWidget {
 
 class _DashboardPreviewPageState extends State<DashboardPreviewPage> {
   bool _hideValues = false;
+  int _selectedIndex = 0;
 
   @override
   Widget build(BuildContext context) {
     final width = MediaQuery.sizeOf(context).width;
     final isDesktop = width >= AppBreakpoints.expanded;
-    final content = _DashboardContent(hideValues: _hideValues, onToggleVisibility: () => setState(() => _hideValues = !_hideValues));
+    final content = _selectedIndex == 0
+        ? _DashboardContent(hideValues: _hideValues, onToggleVisibility: () => setState(() => _hideValues = !_hideValues))
+        : _SectionPlaceholder(index: _selectedIndex, onBack: () => setState(() => _selectedIndex = 0));
 
     return Scaffold(
       drawer: isDesktop ? null : const _NavigationDrawer(),
@@ -26,7 +29,7 @@ class _DashboardPreviewPageState extends State<DashboardPreviewPage> {
       ),
       body: Row(
         children: [
-          if (isDesktop) const _NavigationRail(),
+          if (isDesktop) _NavigationRail(selectedIndex: _selectedIndex, onSelected: (index) => setState(() => _selectedIndex = index)),
           Expanded(
             child: DecoratedBox(
               decoration: const BoxDecoration(gradient: LinearGradient(colors: [AppColors.galaxyStart, AppColors.galaxyEnd], begin: Alignment.topLeft, end: Alignment.bottomRight)),
@@ -91,5 +94,6 @@ class _PreviewPanel extends StatelessWidget { const _PreviewPanel({required this
 class _SummaryRow extends StatelessWidget { const _SummaryRow({required this.label, required this.color, required this.value}); final String label, value; final Color color; @override Widget build(BuildContext context) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(label), const SizedBox(height: 8), Text(value, style: Theme.of(context).textTheme.titleLarge?.copyWith(color: color))]); }
 class _QuickAction extends StatelessWidget { const _QuickAction({required this.icon, required this.label}); final IconData icon; final String label; @override Widget build(BuildContext context) => OutlinedButton.icon(onPressed: () => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$label selecionado'))), icon: Icon(icon), label: Text(label)); }
 class _EmptyState extends StatelessWidget { const _EmptyState({required this.icon, required this.text}); final IconData icon; final String text; @override Widget build(BuildContext context) => Center(child: Padding(padding: const EdgeInsets.all(28), child: Column(children: [Icon(icon, size: 44), const SizedBox(height: 12), Text(text, textAlign: TextAlign.center)]))); }
-class _NavigationRail extends StatelessWidget { const _NavigationRail(); @override Widget build(BuildContext context) => NavigationRail(selectedIndex: 0, onDestinationSelected: (index) => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(['Início', 'Transações', 'Investimentos', 'Assistente', 'Ajustes'][index]))), labelType: NavigationRailLabelType.all, destinations: const [NavigationRailDestination(icon: Icon(Icons.grid_view_outlined), selectedIcon: Icon(Icons.grid_view), label: Text('Início')), NavigationRailDestination(icon: Icon(Icons.receipt_long_outlined), label: Text('Transações')), NavigationRailDestination(icon: Icon(Icons.trending_up), label: Text('Investimentos')), NavigationRailDestination(icon: Icon(Icons.chat_bubble_outline), label: Text('Assistente')), NavigationRailDestination(icon: Icon(Icons.settings_outlined), label: Text('Ajustes'))]); }
+class _NavigationRail extends StatelessWidget { const _NavigationRail({required this.selectedIndex, required this.onSelected}); final int selectedIndex; final ValueChanged<int> onSelected; @override Widget build(BuildContext context) => NavigationRail(selectedIndex: selectedIndex, onDestinationSelected: onSelected, labelType: NavigationRailLabelType.all, destinations: const [NavigationRailDestination(icon: Icon(Icons.grid_view_outlined), selectedIcon: Icon(Icons.grid_view), label: Text('Início')), NavigationRailDestination(icon: Icon(Icons.receipt_long_outlined), label: Text('Transações')), NavigationRailDestination(icon: Icon(Icons.trending_up), label: Text('Investimentos')), NavigationRailDestination(icon: Icon(Icons.chat_bubble_outline), label: Text('Assistente')), NavigationRailDestination(icon: Icon(Icons.settings_outlined), label: Text('Ajustes'))]); }
+class _SectionPlaceholder extends StatelessWidget { const _SectionPlaceholder({required this.index, required this.onBack}); final int index; final VoidCallback onBack; @override Widget build(BuildContext context) { const sections = [('Transações', Icons.receipt_long_outlined, 'Registre receitas, despesas, transferências e reembolsos.'), ('Investimentos', Icons.trending_up, 'Acompanhe CDB, renda fixa e sua evolução patrimonial.'), ('Assistente Financeiro', Icons.auto_awesome, 'Converse com a IA para registrar e consultar sua vida financeira.'), ('Ajustes', Icons.settings_outlined, 'Personalize moeda, privacidade e preferências.')]; final section=sections[index-1]; return Center(child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 520), child: Card(child: Padding(padding: const EdgeInsets.all(32), child: Column(mainAxisSize: MainAxisSize.min, children: [Icon(section.$2, size: 56, color: AppColors.brand), const SizedBox(height: 18), Text(section.$1, style: Theme.of(context).textTheme.headlineSmall), const SizedBox(height: 12), Text(section.$3, textAlign: TextAlign.center), const SizedBox(height: 24), FilledButton.icon(onPressed: onBack, icon: const Icon(Icons.arrow_back), label: const Text('Voltar ao Dashboard'))])))); }}
 class _NavigationDrawer extends StatelessWidget { const _NavigationDrawer(); @override Widget build(BuildContext context) => const NavigationDrawer(children: [DrawerHeader(child: Text('Finance AI')), NavigationDrawerDestination(icon: Icon(Icons.grid_view_outlined), label: Text('Início')), NavigationDrawerDestination(icon: Icon(Icons.receipt_long_outlined), label: Text('Transações')), NavigationDrawerDestination(icon: Icon(Icons.settings_outlined), label: Text('Ajustes'))]); }
