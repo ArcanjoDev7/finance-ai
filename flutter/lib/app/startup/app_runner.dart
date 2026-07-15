@@ -9,7 +9,7 @@ Future<void> runFinanceAiApp() async {
   if (environment.hasSupabaseConfiguration) {
     await Supabase.initialize(
       url: environment.supabaseUrl,
-      anonKey: environment.supabasePublishableKey,
+      publishableKey: environment.supabasePublishableKey,
     );
   }
   runApp(const FinanceAiApp());

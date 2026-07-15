@@ -72,7 +72,27 @@ class _SignInPageState extends State<_SignInPage> {
         body: Center(
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 420),
-            child: Card(child: Padding(padding: const EdgeInsets.all(28), child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [const Icon(Icons.auto_awesome, size: 46), const SizedBox(height: 16), Text(_createAccount ? 'Crie sua conta' : 'Entre no Finance AI', textAlign: TextAlign.center, style: Theme.of(context).textTheme.headlineSmall), const SizedBox(height: 24), TextField(controller: _email, keyboardType: TextInputType.emailAddress, decoration: const InputDecoration(labelText: 'E-mail')), const SizedBox(height: 12), TextField(controller: _password, obscureText: true, decoration: const InputDecoration(labelText: 'Senha')), const SizedBox(height: 20), FilledButton(onPressed: _loading ? null : _submit, child: Text(_loading ? 'Aguarde...' : (_createAccount ? 'Criar conta' : 'Entrar'))), TextButton(onPressed: _loading ? null : () => setState(() => _createAccount = !_createAccount), child: Text(_createAccount ? 'Já tenho uma conta' : 'Criar uma conta'))])),
+            child: Card(
+              child: Padding(
+                padding: const EdgeInsets.all(28),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    const Icon(Icons.auto_awesome, size: 46),
+                    const SizedBox(height: 16),
+                    Text(_createAccount ? 'Crie sua conta' : 'Entre no Finance AI', textAlign: TextAlign.center, style: Theme.of(context).textTheme.headlineSmall),
+                    const SizedBox(height: 24),
+                    TextField(controller: _email, keyboardType: TextInputType.emailAddress, decoration: const InputDecoration(labelText: 'E-mail')),
+                    const SizedBox(height: 12),
+                    TextField(controller: _password, obscureText: true, decoration: const InputDecoration(labelText: 'Senha')),
+                    const SizedBox(height: 20),
+                    FilledButton(onPressed: _loading ? null : _submit, child: Text(_loading ? 'Aguarde...' : (_createAccount ? 'Criar conta' : 'Entrar'))),
+                    TextButton(onPressed: _loading ? null : () => setState(() => _createAccount = !_createAccount), child: Text(_createAccount ? 'Já tenho uma conta' : 'Criar uma conta')),
+                  ],
+                ),
+              ),
+            ),
           ),
         ),
       );

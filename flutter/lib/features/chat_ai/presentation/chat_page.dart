@@ -44,7 +44,7 @@ class _ChatPageState extends State<ChatPage> {
 
   @override
   Widget build(BuildContext context) => Column(children: [
-        Expanded(child: _messages.isEmpty ? const Center(child: Text('Ex.: “Gastei 40 reais no mercado”')) : ListView.separated(padding: const EdgeInsets.all(20), itemCount: _messages.length, separatorBuilder: (_, __) => const SizedBox(height: 10), itemBuilder: (_, index) => Card(child: Padding(padding: const EdgeInsets.all(14), child: Text(_messages[index]))))),
+        Expanded(child: _messages.isEmpty ? const Center(child: Text('Ex.: “Gastei 40 reais no mercado”')) : ListView.separated(padding: const EdgeInsets.all(20), itemCount: _messages.length, separatorBuilder: (_, index) => const SizedBox(height: 10), itemBuilder: (_, index) => Card(child: Padding(padding: const EdgeInsets.all(14), child: Text(_messages[index]))))),
         SafeArea(child: Padding(padding: const EdgeInsets.all(16), child: Row(children: [Expanded(child: TextField(controller: _controller, onSubmitted: (_) => _send(), decoration: const InputDecoration(hintText: 'Escreva uma movimentação ou pergunta'))), const SizedBox(width: 10), FilledButton.icon(onPressed: _sending ? null : _send, icon: const Icon(Icons.send), label: const Text('Enviar'))]))),
       ]);
 }
