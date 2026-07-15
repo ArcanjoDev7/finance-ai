@@ -37,6 +37,8 @@ class _ChatPageState extends State<ChatPage> {
       setState(() => _messages.add('Finance AI: ${data['action']}'));
     } on FunctionException catch (error) {
       setState(() => _messages.add('Erro seguro: ${error.details ?? error.reasonPhrase ?? 'não foi possível processar'}'));
+    } catch (_) {
+      setState(() => _messages.add('Conecte-se com sua conta do Finance AI para enviar comandos à IA. A tela continua disponível enquanto a conexão é preparada.'));
     } finally {
       if (mounted) setState(() => _sending = false);
     }
