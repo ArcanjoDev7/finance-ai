@@ -16,7 +16,7 @@ class AppLogger {
   }
 }
 
-class RiverpodLoggerObserver extends ProviderObserver {
+final class RiverpodLoggerObserver extends ProviderObserver {
   RiverpodLoggerObserver(this._logger);
   final AppLogger _logger;
 
