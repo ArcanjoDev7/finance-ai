@@ -31,10 +31,12 @@ abstract final class AppTheme {
 }
 
 abstract final class AppColors {
-  static const brand = Color(0xFF0B6E4F);
-  static const positive = Color(0xFF087F5B);
-  static const negative = Color(0xFFC92A2A);
-  static const warning = Color(0xFFF08C00);
+  static const brand = Color(0xFF8B5CF6);
+  static const positive = Color(0xFF34D399);
+  static const negative = Color(0xFFFB7185);
+  static const warning = Color(0xFFFBBF24);
+  static const galaxyStart = Color(0xFF10072B);
+  static const galaxyEnd = Color(0xFF061A3A);
 }
 
 abstract final class AppShadows {
