@@ -1,5 +1,6 @@
 import 'dart:math';
 
+import 'package:finance_ai/app/startup/supabase_bootstrap.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -17,6 +18,10 @@ class _ChatPageState extends State<ChatPage> {
   String? _sessionId;
 
   Future<void> _authenticate() async {
+    if (!SupabaseBootstrap.ready) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(SupabaseBootstrap.error ?? 'A conexão ainda está sendo preparada.')));
+      return;
+    }
     final email = TextEditingController();
     final password = TextEditingController();
     await showDialog<void>(
@@ -43,6 +48,10 @@ class _ChatPageState extends State<ChatPage> {
   Future<void> _send() async {
     final text = _controller.text.trim();
     if (text.isEmpty || _sending) return;
+    if (!SupabaseBootstrap.ready) {
+      setState(() => _messages.add(SupabaseBootstrap.error ?? 'A conexão ainda está sendo preparada.'));
+      return;
+    }
     setState(() { _messages.add('Você: $text'); _sending = true; });
     _controller.clear();
     try {
