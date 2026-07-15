@@ -31,7 +31,7 @@ dependencies:
   local_auth: ^3.0.2
   logger: ^2.7.0
   mobile_scanner: ^7.2.1
-  package_info_plus: ^10.2.1
+  package_info_plus: ^10.0.0
   permission_handler: ^12.0.3
   qr_flutter: ^4.1.0
   riverpod_annotation: ^4.0.3
