@@ -1,4 +1,4 @@
-import 'package:flutter/widgets.dart';
+import 'package:finance_ai/features/dashboard/presentation/pages/dashboard_preview_page.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -8,9 +8,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
     routes: [
       GoRoute(
         path: '/',
-        pageBuilder: (context, state) => const NoTransitionPage<void>(
-          child: SizedBox.shrink(),
-        ),
+        builder: (context, state) => const DashboardPreviewPage(),
       ),
     ],
   );
