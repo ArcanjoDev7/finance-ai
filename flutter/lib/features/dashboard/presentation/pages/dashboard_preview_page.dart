@@ -66,7 +66,10 @@ class CryptoItem {
 }
 
 class DashboardPreviewPage extends StatefulWidget {
-  const DashboardPreviewPage({super.key});
+  const DashboardPreviewPage({super.key, required this.onSignOut});
+
+  final Future<void> Function() onSignOut;
+
   @override
   State<DashboardPreviewPage> createState() => _DashboardPreviewPageState();
 }
@@ -487,6 +490,42 @@ class _DashboardPreviewPageState extends State<DashboardPreviewPage> {
     }
   }
 
+  Future<void> _confirmSignOut() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        icon: const Icon(Icons.logout_rounded),
+        title: const Text('Sair da conta?'),
+        content: const Text(
+          'Você será desconectado apenas neste navegador. Seus dados financeiros continuam salvos e protegidos na sua conta.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Sair'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    try {
+      await widget.onSignOut();
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Não foi possível encerrar a sessão agora.'),
+          ),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final desktop = MediaQuery.sizeOf(context).width >= AppBreakpoints.expanded;
@@ -542,6 +581,7 @@ class _DashboardPreviewPageState extends State<DashboardPreviewPage> {
         onToggleSidebar: () =>
             setState(() => _sidebarCollapsed = !_sidebarCollapsed),
         onResetAccount: _confirmAccountReset,
+        onSignOut: _confirmSignOut,
         onOpenAssistant: () => _go(FinancePage.assistant),
         onEditProfile: _editProfile,
       ),
@@ -1491,6 +1531,7 @@ class _SettingsPage extends StatelessWidget {
     required this.onTogglePrivacy,
     required this.onToggleSidebar,
     required this.onResetAccount,
+    required this.onSignOut,
     required this.onOpenAssistant,
     required this.onEditProfile,
   });
@@ -1501,6 +1542,7 @@ class _SettingsPage extends StatelessWidget {
   final VoidCallback onTogglePrivacy;
   final VoidCallback onToggleSidebar;
   final Future<void> Function() onResetAccount;
+  final Future<void> Function() onSignOut;
   final VoidCallback onOpenAssistant;
   final Future<void> Function() onEditProfile;
 
@@ -1523,6 +1565,23 @@ class _SettingsPage extends StatelessWidget {
           trailing: OutlinedButton(
             onPressed: onEditProfile,
             child: const Text('Editar'),
+          ),
+        ),
+      ),
+      const SizedBox(height: 18),
+      _Panel(
+        title: 'Acesso à conta',
+        child: ListTile(
+          contentPadding: EdgeInsets.zero,
+          leading: const CircleAvatar(child: Icon(Icons.logout_rounded)),
+          title: const Text('Sair e entrar em outra conta'),
+          subtitle: const Text(
+            'Encerra a sessão deste navegador. Seus dados continuam salvos na conta atual.',
+          ),
+          trailing: FilledButton.tonalIcon(
+            onPressed: onSignOut,
+            icon: const Icon(Icons.logout_rounded),
+            label: const Text('Sair'),
           ),
         ),
       ),

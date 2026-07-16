@@ -124,8 +124,29 @@ class SupabaseWebClient {
   }
 
   Future<void> signOut() async {
-    await _storage.delete(key: _sessionKey);
-    await _storage.delete(key: _refreshTokenKey);
+    final accessToken = await _storage.read(key: _sessionKey);
+    final config = AppEnvironmentConfig.fromBuild();
+
+    try {
+      if (accessToken != null && config.hasSupabaseConfiguration) {
+        await _dio.post<void>(
+          '${config.supabaseUrl}/auth/v1/logout',
+          options: Options(
+            headers: {
+              'apikey': config.supabasePublishableKey,
+              'Authorization': 'Bearer $accessToken',
+            },
+          ),
+        );
+      }
+    } catch (_) {
+      // Local sign-out must still succeed when the network is unavailable.
+    } finally {
+      await _storage.delete(key: _sessionKey);
+      await _storage.delete(key: _refreshTokenKey);
+      await _storage.delete(key: _profileNameKey);
+      await clearLocalDashboard();
+    }
   }
 
   Future<String?> loadCachedProfileName() =>
