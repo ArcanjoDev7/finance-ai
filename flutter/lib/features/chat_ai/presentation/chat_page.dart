@@ -650,6 +650,8 @@ class _ChatPageState extends State<ChatPage> {
         );
         widget.onInvestmentCreated(
           InvestmentItem(
+            id: action['savedTransactionId'] as String? ?? id,
+            date: DateTime.now(),
             name: investmentName,
             institution: '${action['bank'] ?? 'Carteira principal'}',
             type: financeInvestmentType(investmentName),
@@ -661,6 +663,8 @@ class _ChatPageState extends State<ChatPage> {
       case 'create_crypto_purchase':
         widget.onCryptoCreated(
           CryptoItem(
+            id: action['savedTransactionId'] as String? ?? id,
+            date: DateTime.now(),
             asset: financeCryptoLabel('${action['investment'] ?? 'Cripto'}'),
             amount: amount,
             operation: 'Compra',
@@ -670,6 +674,8 @@ class _ChatPageState extends State<ChatPage> {
       case 'create_crypto_sale':
         widget.onCryptoCreated(
           CryptoItem(
+            id: action['savedTransactionId'] as String? ?? id,
+            date: DateTime.now(),
             asset: financeCryptoLabel('${action['investment'] ?? 'Cripto'}'),
             amount: amount,
             operation: 'Venda',
@@ -679,6 +685,8 @@ class _ChatPageState extends State<ChatPage> {
       case 'create_crypto_conversion':
         widget.onCryptoCreated(
           CryptoItem(
+            id: action['savedTransactionId'] as String? ?? id,
+            date: DateTime.now(),
             asset: financeCryptoLabel('${action['investment'] ?? 'Cripto'}'),
             amount: amount,
             operation: 'Conversão',

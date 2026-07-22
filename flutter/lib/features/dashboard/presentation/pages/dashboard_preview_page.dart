@@ -19,7 +19,14 @@ enum FinancePage {
   settings,
 }
 
-enum EntryKind { income, expense }
+enum EntryKind {
+  income,
+  expense,
+  investment,
+  cryptoBuy,
+  cryptoSell,
+  cryptoConversion,
+}
 
 class FinanceEntry {
   const FinanceEntry({
@@ -31,6 +38,7 @@ class FinanceEntry {
     required this.date,
     this.isCard = false,
     this.bank,
+    this.assetLabel,
   });
   final String id;
   final String description;
@@ -40,6 +48,7 @@ class FinanceEntry {
   final DateTime date;
   final bool isCard;
   final String? bank;
+  final String? assetLabel;
 }
 
 class InvestmentItem {
@@ -49,12 +58,16 @@ class InvestmentItem {
     required this.type,
     required this.amount,
     required this.yieldDescription,
+    this.id,
+    this.date,
   });
   final String name;
   final String institution;
   final String type;
   final double amount;
   final String yieldDescription;
+  final String? id;
+  final DateTime? date;
 }
 
 class CryptoItem {
@@ -62,10 +75,55 @@ class CryptoItem {
     required this.asset,
     required this.amount,
     required this.operation,
+    this.id,
+    this.date,
   });
   final String asset;
   final double amount;
   final String operation;
+  final String? id;
+  final DateTime? date;
+}
+
+List<FinanceEntry> buildFinanceTimeline({
+  required List<FinanceEntry> entries,
+  required List<InvestmentItem> investments,
+  required List<CryptoItem> cryptos,
+}) {
+  final fallbackDate = DateTime.fromMillisecondsSinceEpoch(0);
+  final timeline = <FinanceEntry>[
+    ...entries,
+    ...investments.map(
+      (item) => FinanceEntry(
+        id: item.id ?? 'investment-${item.name}-${item.amount}',
+        description: '${financeInvestmentLabel(item.name)} · Aporte',
+        category: item.type,
+        amount: item.amount,
+        kind: EntryKind.investment,
+        date: item.date ?? fallbackDate,
+        bank: item.institution,
+        assetLabel: item.name,
+      ),
+    ),
+    ...cryptos.map((item) {
+      final kind = switch (item.operation) {
+        'Venda' => EntryKind.cryptoSell,
+        'Conversão' => EntryKind.cryptoConversion,
+        _ => EntryKind.cryptoBuy,
+      };
+      return FinanceEntry(
+        id: item.id ?? 'crypto-${item.asset}-${item.operation}-${item.amount}',
+        description: '${financeCryptoLabel(item.asset)} · ${item.operation}',
+        category: 'Criptomoeda',
+        amount: item.amount,
+        kind: kind,
+        date: item.date ?? fallbackDate,
+        assetLabel: item.asset,
+      );
+    }),
+  ];
+  timeline.sort((a, b) => b.date.compareTo(a.date));
+  return timeline;
 }
 
 String financeCryptoLabel(String value) {
@@ -337,6 +395,8 @@ class _DashboardPreviewPageState extends State<DashboardPreviewPage> {
         if (type == 'investment') {
           investments.add(
             InvestmentItem(
+              id: '${row['id']}',
+              date: date,
               name: financeInvestmentLabel(
                 '${metadata['investment'] ?? description}',
               ),
@@ -350,13 +410,20 @@ class _DashboardPreviewPageState extends State<DashboardPreviewPage> {
           );
         }
         if (type == 'crypto_buy' || type == 'crypto_sell') {
+          final operation = metadata['intent'] == 'create_crypto_conversion'
+              ? 'Conversão'
+              : type == 'crypto_sell'
+              ? 'Venda'
+              : 'Compra';
           cryptos.add(
             CryptoItem(
+              id: '${row['id']}',
+              date: date,
               asset: financeCryptoLabel(
                 '${metadata['investment'] ?? description}',
               ),
               amount: amount,
-              operation: type == 'crypto_sell' ? 'Venda' : 'Compra',
+              operation: operation,
             ),
           );
         }
@@ -411,6 +478,8 @@ class _DashboardPreviewPageState extends State<DashboardPreviewPage> {
         ..addAll(
           list('investments').map(
             (item) => InvestmentItem(
+              id: item['id'] as String?,
+              date: DateTime.tryParse('${item['date'] ?? ''}'),
               name: '${item['name']}',
               institution: '${item['institution']}',
               type: '${item['type']}',
@@ -424,6 +493,8 @@ class _DashboardPreviewPageState extends State<DashboardPreviewPage> {
         ..addAll(
           list('cryptos').map(
             (item) => CryptoItem(
+              id: item['id'] as String?,
+              date: DateTime.tryParse('${item['date'] ?? ''}'),
               asset: '${item['asset']}',
               amount: (item['amount'] as num).toDouble(),
               operation: '${item['operation']}',
@@ -454,6 +525,8 @@ class _DashboardPreviewPageState extends State<DashboardPreviewPage> {
       'investments': _investments
           .map(
             (item) => {
+              'id': item.id,
+              'date': item.date?.toIso8601String(),
               'name': item.name,
               'institution': item.institution,
               'type': item.type,
@@ -465,6 +538,8 @@ class _DashboardPreviewPageState extends State<DashboardPreviewPage> {
       'cryptos': _cryptos
           .map(
             (item) => {
+              'id': item.id,
+              'date': item.date?.toIso8601String(),
               'asset': item.asset,
               'amount': item.amount,
               'operation': item.operation,
@@ -529,6 +604,12 @@ class _DashboardPreviewPageState extends State<DashboardPreviewPage> {
     setState(() => _cryptos.insert(0, item));
     _persistLocalDashboard();
   }
+
+  List<FinanceEntry> get _timelineEntries => buildFinanceTimeline(
+    entries: _entries,
+    investments: _investments,
+    cryptos: _cryptos,
+  );
 
   Future<void> _showEntryForm({
     EntryKind kind = EntryKind.expense,
@@ -706,7 +787,7 @@ class _DashboardPreviewPageState extends State<DashboardPreviewPage> {
     final desktop = width >= AppBreakpoints.expanded;
     final content = switch (_page) {
       FinancePage.dashboard => _DashboardContent(
-        entries: _entries,
+        entries: _timelineEntries,
         investments: _investments,
         profileName: _profileName,
         hideValues: _hideValues,
@@ -715,7 +796,7 @@ class _DashboardPreviewPageState extends State<DashboardPreviewPage> {
         onAddInvestment: _showInvestmentForm,
       ),
       FinancePage.transactions => _TransactionsPage(
-        entries: _entries,
+        entries: _timelineEntries,
         hideValues: _hideValues,
         onAdd: _showEntryForm,
       ),
@@ -1687,13 +1768,25 @@ class _TransactionsPage extends StatefulWidget {
 
 class _TransactionsPageState extends State<_TransactionsPage> {
   String _query = '';
-  EntryKind? _filter;
+  String _filter = 'all';
+
+  bool _matchesFilter(FinanceEntry entry) => switch (_filter) {
+    'income' => entry.kind == EntryKind.income,
+    'expense' => entry.kind == EntryKind.expense,
+    'investment' => entry.kind == EntryKind.investment,
+    'crypto' =>
+      entry.kind == EntryKind.cryptoBuy ||
+          entry.kind == EntryKind.cryptoSell ||
+          entry.kind == EntryKind.cryptoConversion,
+    _ => true,
+  };
+
   @override
   Widget build(BuildContext context) {
     final items = widget.entries
         .where(
           (entry) =>
-              (_filter == null || entry.kind == _filter) &&
+              _matchesFilter(entry) &&
               ('${entry.description} ${entry.category}').toLowerCase().contains(
                 _query.toLowerCase(),
               ),
@@ -1704,7 +1797,8 @@ class _TransactionsPageState extends State<_TransactionsPage> {
       children: [
         _PageHeader(
           title: 'Movimentações',
-          subtitle: 'Receitas e despesas em uma única linha do tempo.',
+          subtitle:
+              'Receitas, despesas, investimentos e cripto em uma única linha do tempo.',
           action: FilledButton.icon(
             onPressed: () => widget.onAdd(kind: EntryKind.expense),
             icon: const Icon(Icons.add),
@@ -1730,18 +1824,28 @@ class _TransactionsPageState extends State<_TransactionsPage> {
               ),
               ChoiceChip(
                 label: const Text('Todas'),
-                selected: _filter == null,
-                onSelected: (_) => setState(() => _filter = null),
+                selected: _filter == 'all',
+                onSelected: (_) => setState(() => _filter = 'all'),
               ),
               ChoiceChip(
                 label: const Text('Receitas'),
-                selected: _filter == EntryKind.income,
-                onSelected: (_) => setState(() => _filter = EntryKind.income),
+                selected: _filter == 'income',
+                onSelected: (_) => setState(() => _filter = 'income'),
               ),
               ChoiceChip(
                 label: const Text('Despesas'),
-                selected: _filter == EntryKind.expense,
-                onSelected: (_) => setState(() => _filter = EntryKind.expense),
+                selected: _filter == 'expense',
+                onSelected: (_) => setState(() => _filter = 'expense'),
+              ),
+              ChoiceChip(
+                label: const Text('Investimentos'),
+                selected: _filter == 'investment',
+                onSelected: (_) => setState(() => _filter = 'investment'),
+              ),
+              ChoiceChip(
+                label: const Text('Cripto'),
+                selected: _filter == 'crypto',
+                onSelected: (_) => setState(() => _filter = 'crypto'),
               ),
             ],
           ),
@@ -3128,20 +3232,41 @@ class _EntryRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final expense = entry.kind == EntryKind.expense;
+    final investment = entry.kind == EntryKind.investment;
+    final crypto =
+        entry.kind == EntryKind.cryptoBuy ||
+        entry.kind == EntryKind.cryptoSell ||
+        entry.kind == EntryKind.cryptoConversion;
+    final outflow =
+        expense ||
+        investment ||
+        entry.kind == EntryKind.cryptoBuy ||
+        entry.kind == EntryKind.cryptoConversion;
+    final identity = entry.assetLabel;
     return ListTile(
       contentPadding: const EdgeInsets.symmetric(vertical: 5),
-      leading: !expense && entry.bank != null && entry.bank!.trim().isNotEmpty
+      leading: crypto && identity != null
+          ? _FinancialIdentityAvatar(
+              label: identity,
+              kind: _IdentityKind.crypto,
+            )
+          : investment && identity != null
+          ? _FinancialIdentityAvatar(
+              label: identity,
+              kind: _IdentityKind.investment,
+            )
+          : !expense && entry.bank != null && entry.bank!.trim().isNotEmpty
           ? _FinancialIdentityAvatar(
               label: entry.bank!,
               kind: _IdentityKind.bank,
             )
           : CircleAvatar(
-              backgroundColor: expense
+              backgroundColor: outflow
                   ? const Color(0xFF4A202D)
                   : const Color(0xFF153D35),
               child: Icon(
-                expense ? Icons.arrow_upward : Icons.arrow_downward,
-                color: expense ? AppColors.negative : AppColors.positive,
+                outflow ? Icons.arrow_upward : Icons.arrow_downward,
+                color: outflow ? AppColors.negative : AppColors.positive,
               ),
             ),
       title: Text(entry.description),
@@ -3153,7 +3278,7 @@ class _EntryRow extends StatelessWidget {
       trailing: _FinancialValue(
         value: entry.amount,
         hidden: hideValues,
-        negative: expense,
+        negative: outflow,
         style: Theme.of(
           context,
         ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
@@ -3348,6 +3473,8 @@ class _InvestmentFormState extends State<_InvestmentForm> {
     Navigator.pop(
       context,
       InvestmentItem(
+        id: 'local-investment-${DateTime.now().microsecondsSinceEpoch}',
+        date: DateTime.now(),
         name: name.text.trim(),
         institution: institution.text.trim().isEmpty
             ? 'Instituição não informada'
@@ -3432,7 +3559,13 @@ class _CryptoFormState extends State<_CryptoForm> {
     }
     Navigator.pop(
       context,
-      CryptoItem(asset: asset.text.trim(), amount: value, operation: operation),
+      CryptoItem(
+        id: 'local-crypto-${DateTime.now().microsecondsSinceEpoch}',
+        date: DateTime.now(),
+        asset: asset.text.trim(),
+        amount: value,
+        operation: operation,
+      ),
     );
   }
 

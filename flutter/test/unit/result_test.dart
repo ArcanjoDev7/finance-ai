@@ -79,4 +79,45 @@ void main() {
       'Um lanche',
     );
   });
+
+  test('Timeline counts income, expense, investment and crypto operations', () {
+    final timeline = buildFinanceTimeline(
+      entries: [
+        FinanceEntry(
+          id: 'income-1',
+          description: 'Salário',
+          category: 'Receitas',
+          amount: 4000,
+          kind: EntryKind.income,
+          date: DateTime(2026, 7, 20),
+        ),
+      ],
+      investments: [
+        InvestmentItem(
+          id: 'investment-1',
+          date: DateTime(2026, 7, 21),
+          name: 'CDB',
+          institution: 'Conta principal',
+          type: 'Renda fixa',
+          amount: 500,
+          yieldDescription: 'Sincronizado',
+        ),
+      ],
+      cryptos: [
+        CryptoItem(
+          id: 'crypto-1',
+          date: DateTime(2026, 7, 22),
+          asset: 'DOGE',
+          amount: 500,
+          operation: 'Compra',
+        ),
+      ],
+    );
+
+    expect(timeline, hasLength(3));
+    expect(timeline.first.kind, EntryKind.cryptoBuy);
+    expect(timeline.first.description, 'DOGE · Compra');
+    expect(timeline[1].kind, EntryKind.investment);
+    expect(timeline.last.kind, EntryKind.income);
+  });
 }

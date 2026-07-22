@@ -555,7 +555,7 @@ async function persistFinancialAction(admin: ReturnType<typeof createClient>, us
     transaction_type: transactionType,
     occurred_at: action.date ? `${action.date}T12:00:00.000Z` : new Date().toISOString(),
     idempotency_key: idempotencyKey,
-    metadata: { source: 'ai', category: action.category, investment: action.investment, quantity: action.quantity, account: action.account, bank: action.bank, wallet: action.wallet },
+    metadata: { source: 'ai', intent: action.intent, category: action.category, investment: action.investment, quantity: action.quantity, account: action.account, bank: action.bank, wallet: action.wallet },
   }).select('id').single();
   if (error) throw new Error('TRANSACTION_CREATION_FAILED');
   return transaction.id as string;
