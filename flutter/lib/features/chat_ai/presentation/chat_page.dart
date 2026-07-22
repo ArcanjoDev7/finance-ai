@@ -32,6 +32,68 @@ class ChatMessage {
   final Map<String, dynamic>? action;
 }
 
+Map<String, dynamic>? parseTaggedFinanceCommand(
+  String original,
+  double? amount,
+) {
+  final source = original.toLowerCase();
+  final match = RegExp(
+    r'^@(cripto|crypto|despesa|dispesa|gasto|saida|cartao|receita|entrada|salario|investimento|investir)\b\s*(.*)$',
+  ).firstMatch(source.trim());
+  if (match == null) return null;
+  final tag = match.group(1)!;
+  final details = match.group(2)!.trim();
+  if (amount == null) {
+    return {
+      'intent': 'needs_clarification',
+      'answer': 'Informe o valor no mesmo comando. Ex.: @$tag Bitcoin 100',
+    };
+  }
+  if (['despesa', 'dispesa', 'gasto', 'saida', 'cartao'].contains(tag)) {
+    return {
+      'intent': 'create_expense',
+      'amount': amount,
+      'description': original,
+      'category': details.contains('mercado') ? 'Alimentação' : 'Outros',
+      'account':
+          tag == 'cartao' ||
+              details.contains('cartão') ||
+              details.contains('cartao')
+          ? 'Cartão'
+          : 'Conta principal',
+    };
+  }
+  if (['receita', 'entrada', 'salario'].contains(tag)) {
+    return {
+      'intent': 'create_income',
+      'amount': amount,
+      'description': original,
+      'category': 'Receitas',
+    };
+  }
+  if (tag == 'investimento' || tag == 'investir') {
+    return {
+      'intent': 'create_investment',
+      'amount': amount,
+      'investment': details.isEmpty ? 'Investimento' : details,
+      'bank': 'Carteira principal',
+    };
+  }
+  return {
+    'intent': details.contains('vendi') || details.contains('venda')
+        ? 'create_crypto_sale'
+        : details.contains('converti') || details.contains('troquei')
+        ? 'create_crypto_conversion'
+        : 'create_crypto_purchase',
+    'amount': amount,
+    'investment': details.contains('ethereum') || details.contains('eth')
+        ? 'Ethereum'
+        : details.contains('bitcoin') || details.contains('btc')
+        ? 'Bitcoin'
+        : 'Cripto',
+  };
+}
+
 class _ChatPageState extends State<ChatPage> {
   final _input = TextEditingController();
   final _messagesController = ScrollController();
@@ -253,6 +315,8 @@ class _ChatPageState extends State<ChatPage> {
   Map<String, dynamic> _parse(String text) {
     final source = text.toLowerCase();
     final amount = _parseAmount(source);
+    final tagged = parseTaggedFinanceCommand(text, amount);
+    if (tagged != null) return tagged;
     if ((source.contains('zerar') ||
             source.contains('limpar') ||
             source.contains('reiniciar')) &&
@@ -580,8 +644,8 @@ class _ChatPageState extends State<ChatPage> {
                   controller: _input,
                   onSubmitted: (_) => _send(),
                   decoration: const InputDecoration(
-                    prefixIcon: Icon(Icons.auto_awesome),
-                    hintText: 'Ex.: Gastei R\$ 50 no mercado',
+                    prefixIcon: Icon(Icons.alternate_email_rounded),
+                    hintText: 'Ex.: @cripto Bitcoin 100',
                   ),
                 ),
               ),
@@ -612,10 +676,10 @@ class _Empty extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     const items = [
-      'Gastei R\$ 50 no mercado',
-      'Recebi R\$ 4.000 de salário',
-      'Investi R\$ 5.000 no CDB',
-      'Comprei R\$ 1.500 de Bitcoin',
+      '@despesa mercado 50',
+      '@receita salário 4000',
+      '@investimento CDB 5000',
+      '@cripto Bitcoin 1500',
     ];
     return Center(
       child: SingleChildScrollView(
@@ -631,6 +695,12 @@ class _Empty extends StatelessWidget {
               style: Theme.of(context).textTheme.headlineSmall,
             ),
             const SizedBox(height: 18),
+            const Text(
+              'Use @ para salvar direto na categoria certa:',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Colors.white70),
+            ),
+            const SizedBox(height: 12),
             Wrap(
               spacing: 10,
               runSpacing: 10,

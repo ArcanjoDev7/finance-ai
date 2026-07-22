@@ -180,6 +180,77 @@ function directCompletedPurchase(message: string): FinanceAction | null {
   };
 }
 
+function directTaggedCommand(message: string): FinanceAction | null {
+  const text = normalizeText(message).trim();
+  const match = text.match(/^@(cripto|crypto|despesa|dispesa|gasto|saida|cartao|receita|entrada|salario|investimento|investir)\b\s*(.*)$/);
+  if (!match) return null;
+
+  const [, rawTag, details] = match;
+  const amount = parseBrlAmount(details);
+  if (!amount) {
+    return {
+      intent: 'needs_clarification',
+      answer: `Informe o valor no mesmo comando. Exemplo: @${rawTag} Bitcoin 100`,
+      confidence: 1,
+    };
+  }
+
+  const description = details
+    .replace(/(?:r\$\s*)?\d[\d.,]*/gi, '')
+    .replace(/\b(por|de|em|no|na|do|da|comprei|compra|vendi|venda|recebi|gastei|paguei|investi)\b/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const common = {
+    amount,
+    currency: 'BRL',
+    description: description || message.trim(),
+    confidence: 1,
+  };
+
+  if (['despesa', 'dispesa', 'gasto', 'saida', 'cartao'].includes(rawTag)) {
+    const category = /\b(mercado|supermercado|comida|lanche|restaurante)\b/.test(details)
+      ? 'Alimentação'
+      : /\b(farmacia|remedio|consulta|medico)\b/.test(details)
+        ? 'Saúde'
+        : /\b(uber|onibus|combustivel|gasolina|transporte)\b/.test(details)
+          ? 'Transporte'
+          : 'Outros';
+    return {
+      ...common,
+      intent: 'create_expense',
+      category,
+      account: rawTag === 'cartao' || /\b(cartao|credito|fatura)\b/.test(details)
+        ? 'Cartão'
+        : 'Conta principal',
+    };
+  }
+
+  if (['receita', 'entrada', 'salario'].includes(rawTag)) {
+    return { ...common, intent: 'create_income', category: 'Receitas' };
+  }
+
+  if (rawTag === 'investimento' || rawTag === 'investir') {
+    return {
+      ...common,
+      intent: 'create_investment',
+      investment: description || 'Investimento',
+      bank: 'Carteira principal',
+    };
+  }
+
+  const investment = /\b(ethereum|eth)\b/.test(details)
+    ? 'Ethereum'
+    : /\b(bitcoin|btc)\b/.test(details)
+      ? 'Bitcoin'
+      : description || 'Cripto';
+  const intent = /\b(vendi|venda|saquei|resgatei)\b/.test(details)
+    ? 'create_crypto_sale'
+    : /\b(converti|conversao|troquei)\b/.test(details)
+      ? 'create_crypto_conversion'
+      : 'create_crypto_purchase';
+  return { ...common, intent, investment };
+}
+
 function isoDate(value: Date) {
   return value.toISOString().slice(0, 10);
 }
@@ -495,19 +566,21 @@ Deno.serve(async (request) => {
     .single();
   if (actionError) return response({ error: { code: 'ACTION_CREATION_FAILED' } }, 500);
 
-  const completedPurchase = directCompletedPurchase(payload.message);
-  if (completedPurchase) {
+  const directAction = directTaggedCommand(payload.message) ?? directCompletedPurchase(payload.message);
+  if (directAction) {
     const occurredDate = explicitOccurredDate(payload.message);
-    if (occurredDate) completedPurchase.date = occurredDate;
+    if (occurredDate) directAction.date = occurredDate;
     try {
       const transactionId = await persistFinancialAction(
         admin,
         userId,
-        completedPurchase,
+        directAction,
         payload.idempotencyKey,
       );
-      if (!transactionId) throw new Error('TRANSACTION_CREATION_FAILED');
-      completedPurchase.savedTransactionId = transactionId;
+      if (transactionTypeFor(directAction.intent) && !transactionId) {
+        throw new Error('TRANSACTION_CREATION_FAILED');
+      }
+      if (transactionId) directAction.savedTransactionId = transactionId;
     } catch {
       await admin.from('ai_actions').update({ status: 'failed' }).eq('id', action.id);
       return response({ error: { code: 'ACTION_PERSISTENCE_FAILED' } }, 500);
@@ -516,17 +589,17 @@ Deno.serve(async (request) => {
       user_id: userId,
       chat_session_id: sessionId,
       role: 'assistant',
-      content: completedPurchase,
-      model_name: 'deterministic-purchase-parser',
+      content: directAction,
+      model_name: 'deterministic-command-parser',
     });
     await admin.from('ai_actions').update({
-      intent: completedPurchase.intent,
-      result_json: completedPurchase,
+      intent: directAction.intent,
+      result_json: directAction,
       status: 'processed',
       processed_at: new Date().toISOString(),
     }).eq('id', action.id);
     await admin.from('chat_sessions').update({ last_message_at: new Date().toISOString() }).eq('id', sessionId);
-    return response({ sessionId, action: completedPurchase, replayed: false, source: 'deterministic' });
+    return response({ sessionId, action: directAction, replayed: false, source: 'deterministic' });
   }
 
   const instruction = `Você é o assistente financeiro do Finance AI para usuários brasileiros.
