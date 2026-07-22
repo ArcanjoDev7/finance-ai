@@ -36,6 +36,7 @@ class SupabaseWebClient {
   static const _sessionKey = 'finance_ai_access_token';
   static const _refreshTokenKey = 'finance_ai_refresh_token';
   static const _profileNameKey = 'finance_ai_profile_name';
+  static const _dashboardDraftKey = 'finance_ai_dashboard_draft';
   final Dio _dio = Dio();
   final FlutterSecureStorage _storage = const FlutterSecureStorage();
 
@@ -67,8 +68,18 @@ class SupabaseWebClient {
       options: Options(headers: {'apikey': config.supabasePublishableKey}),
     );
     final token = response.data?['access_token'] as String?;
-    if (token == null) return const AuthResult(requiresEmailConfirmation: true);
+    if (token == null) {
+      // A different tab may still have a previous account in secure storage.
+      // Never restore that account after creating one that awaits confirmation.
+      await clearStoredSession();
+      return const AuthResult(requiresEmailConfirmation: true);
+    }
     return _persistAuthSession(response.data);
+  }
+
+  Future<void> clearStoredSession() async {
+    await _storage.delete(key: _sessionKey);
+    await _storage.delete(key: _refreshTokenKey);
   }
 
   Future<AuthResult> _persistAuthSession(Map<String, dynamic>? payload) async {
@@ -123,6 +134,28 @@ class SupabaseWebClient {
     }
   }
 
+  String _userIdFromToken(String token) {
+    try {
+      final parts = token.split('.');
+      if (parts.length != 3) throw const FormatException('Invalid JWT');
+      final payload = jsonDecode(
+        utf8.decode(base64Url.decode(base64Url.normalize(parts[1]))),
+      );
+      final userId = payload is Map ? payload['sub'] : null;
+      if (userId is! String || userId.isEmpty) {
+        throw const FormatException('JWT without subject');
+      }
+      return userId;
+    } catch (error) {
+      throw StateError(
+        'Não foi possível identificar o usuário da sessão: $error',
+      );
+    }
+  }
+
+  String _scopedKey(String baseKey, String token) =>
+      '${baseKey}_${_userIdFromToken(token)}';
+
   Future<void> signOut() async {
     final accessToken = await _storage.read(key: _sessionKey);
     final config = AppEnvironmentConfig.fromBuild();
@@ -142,21 +175,29 @@ class SupabaseWebClient {
     } catch (_) {
       // Local sign-out must still succeed when the network is unavailable.
     } finally {
-      await _storage.delete(key: _sessionKey);
-      await _storage.delete(key: _refreshTokenKey);
+      await clearStoredSession();
+      if (accessToken != null) {
+        await _storage.delete(key: _scopedKey(_profileNameKey, accessToken));
+        await clearLocalDashboard(accessToken);
+      }
+      // Remove values written by versions that did not isolate caches by user.
       await _storage.delete(key: _profileNameKey);
-      await clearLocalDashboard();
+      await _storage.delete(key: _dashboardDraftKey);
     }
   }
 
-  Future<String?> loadCachedProfileName() =>
-      _storage.read(key: _profileNameKey);
+  Future<String?> loadCachedProfileName(String token) =>
+      _storage.read(key: _scopedKey(_profileNameKey, token));
 
   Future<String?> loadProfileName(String token) async {
     final config = _config;
     final response = await _dio.get<List<dynamic>>(
       '${config.supabaseUrl}/rest/v1/profiles',
-      queryParameters: {'select': 'full_name', 'deleted_at': 'is.null'},
+      queryParameters: {
+        'select': 'full_name',
+        'user_id': 'eq.${_userIdFromToken(token)}',
+        'deleted_at': 'is.null',
+      },
       options: Options(
         headers: {
           'apikey': config.supabasePublishableKey,
@@ -173,27 +214,36 @@ class SupabaseWebClient {
         const <String>[];
     final name = names.isEmpty ? null : names.first;
     if (name != null && name.trim().isNotEmpty) {
-      await _storage.write(key: _profileNameKey, value: name.trim());
+      await _storage.write(
+        key: _scopedKey(_profileNameKey, token),
+        value: name.trim(),
+      );
     }
     return name?.trim();
   }
 
-  Future<void> saveProfileName(String name, {String? token}) async {
+  Future<void> saveProfileName(String name, {required String token}) async {
     final normalized = name.trim();
-    await _storage.write(key: _profileNameKey, value: normalized);
-    if (token == null) return;
+    if (normalized.isEmpty) {
+      throw ArgumentError.value(name, 'name', 'O nome não pode ficar vazio.');
+    }
     final config = _config;
-    await _dio.patch<void>(
+    final userId = _userIdFromToken(token);
+    await _dio.post<void>(
       '${config.supabaseUrl}/rest/v1/profiles',
-      queryParameters: {'deleted_at': 'is.null'},
-      data: {'full_name': normalized},
+      queryParameters: {'on_conflict': 'user_id'},
+      data: {'user_id': userId, 'full_name': normalized, 'deleted_at': null},
       options: Options(
         headers: {
           'apikey': config.supabasePublishableKey,
           'Authorization': 'Bearer $token',
-          'Prefer': 'return=minimal',
+          'Prefer': 'resolution=merge-duplicates,return=minimal',
         },
       ),
+    );
+    await _storage.write(
+      key: _scopedKey(_profileNameKey, token),
+      value: normalized,
     );
   }
 
@@ -220,20 +270,23 @@ class SupabaseWebClient {
         .toList();
   }
 
-  Future<Map<String, dynamic>?> loadLocalDashboard() async {
-    final value = await _storage.read(key: 'finance_ai_dashboard_draft');
+  Future<Map<String, dynamic>?> loadLocalDashboard(String token) async {
+    final value = await _storage.read(
+      key: _scopedKey(_dashboardDraftKey, token),
+    );
     if (value == null) return null;
     final decoded = jsonDecode(value);
     return decoded is Map ? Map<String, dynamic>.from(decoded) : null;
   }
 
-  Future<void> saveLocalDashboard(Map<String, dynamic> value) => _storage.write(
-    key: 'finance_ai_dashboard_draft',
-    value: jsonEncode(value),
-  );
+  Future<void> saveLocalDashboard(String token, Map<String, dynamic> value) =>
+      _storage.write(
+        key: _scopedKey(_dashboardDraftKey, token),
+        value: jsonEncode(value),
+      );
 
-  Future<void> clearLocalDashboard() =>
-      _storage.delete(key: 'finance_ai_dashboard_draft');
+  Future<void> clearLocalDashboard(String token) =>
+      _storage.delete(key: _scopedKey(_dashboardDraftKey, token));
 
   Future<Map<String, dynamic>> resetAccount(
     String token,

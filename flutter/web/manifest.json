@@ -1,0 +1,20 @@
+{
+  "name": "Finance AI",
+  "short_name": "Finance AI",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#0B0820",
+  "theme_color": "#0B0820",
+  "description": "Seu assistente financeiro pessoal com IA.",
+  "categories": ["finance", "productivity"],
+  "icons": [
+    {
+      "src": "icons/app-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

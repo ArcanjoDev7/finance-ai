@@ -16,11 +16,23 @@ class AuthGate extends StatefulWidget {
 class _AuthGateState extends State<AuthGate> {
   String? _token;
   var _checking = true;
+  Timer? _sessionSyncTimer;
+  var _syncingSession = false;
 
   @override
   void initState() {
     super.initState();
     _restoreSession();
+    _sessionSyncTimer = Timer.periodic(
+      const Duration(seconds: 2),
+      (_) => _syncSessionAcrossTabs(),
+    );
+  }
+
+  @override
+  void dispose() {
+    _sessionSyncTimer?.cancel();
+    super.dispose();
   }
 
   Future<void> _restoreSession() async {
@@ -37,6 +49,19 @@ class _AuthGateState extends State<AuthGate> {
     if (mounted) setState(() => _token = null);
   }
 
+  Future<void> _syncSessionAcrossTabs() async {
+    if (_checking || _syncingSession) return;
+    _syncingSession = true;
+    try {
+      final storedToken = await SupabaseWebClient.instance.restoredSession();
+      if (mounted && storedToken != _token) {
+        setState(() => _token = storedToken);
+      }
+    } finally {
+      _syncingSession = false;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_checking) {
@@ -46,7 +71,11 @@ class _AuthGateState extends State<AuthGate> {
       return const _ConfigurationRequiredPage();
     }
     if (_token != null) {
-      return DashboardPreviewPage(onSignOut: _signOut);
+      return DashboardPreviewPage(
+        key: ValueKey(_token),
+        accessToken: _token!,
+        onSignOut: _signOut,
+      );
     }
     return _AuthPage(
       onAuthenticated: (token) => setState(() => _token = token),
@@ -216,6 +245,7 @@ class _AuthPageState extends State<_AuthPage> {
 
   @override
   Widget build(BuildContext context) {
+    final compact = MediaQuery.sizeOf(context).width < 600;
     final blocked = _createAccount && _signupBlocked;
     final submitLabel = _loading
         ? 'Aguarde...'
@@ -236,13 +266,13 @@ class _AuthPageState extends State<_AuthPage> {
         ),
         child: Center(
           child: SingleChildScrollView(
-            padding: const EdgeInsets.all(24),
+            padding: EdgeInsets.all(compact ? 16 : 24),
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 440),
               child: Card(
                 color: const Color(0xEE211C29),
                 child: Padding(
-                  padding: const EdgeInsets.all(30),
+                  padding: EdgeInsets.all(compact ? 20 : 30),
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.stretch,

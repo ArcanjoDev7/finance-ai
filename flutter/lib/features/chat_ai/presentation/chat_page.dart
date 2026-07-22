@@ -30,6 +30,7 @@ class _ChatPageState extends State<ChatPage> {
   final _messagesController = ScrollController();
   final _messages = <_Message>[];
   String? _token;
+  String? _sessionId;
   bool _sending = false;
 
   @override
@@ -178,16 +179,21 @@ class _ChatPageState extends State<ChatPage> {
     });
     _scrollToLatestMessage();
     try {
-      final action = _token == null
-          ? _parse(text)
-          : Map<String, dynamic>.from(
-              (await SupabaseWebClient.instance.chat(_token!, {
-                        'message': text,
-                        'idempotencyKey': _key(),
-                      }))['action']
-                      as Map? ??
-                  const {},
-            );
+      final Map<String, dynamic> action;
+      if (_token == null) {
+        action = _parse(text);
+      } else {
+        final response = await SupabaseWebClient.instance.chat(_token!, {
+          'message': text,
+          'idempotencyKey': _key(),
+          if (_sessionId != null) 'sessionId': _sessionId,
+        });
+        final returnedSessionId = response['sessionId'];
+        if (returnedSessionId is String) _sessionId = returnedSessionId;
+        action = Map<String, dynamic>.from(
+          response['action'] as Map? ?? const {},
+        );
+      }
       _apply(action);
       if (mounted) {
         setState(
@@ -327,8 +333,20 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   void _apply(Map<String, dynamic> action) {
+    final nestedActions = action['actions'];
+    if (nestedActions is List) {
+      for (final nested in nestedActions.whereType<Map>()) {
+        _apply(Map<String, dynamic>.from(nested));
+      }
+      return;
+    }
     if (action['intent'] == 'reset_account') {
       widget.onAccountReset();
+      return;
+    }
+    if (_token != null &&
+        '${action['intent']}'.startsWith('create_') &&
+        action['savedTransactionId'] == null) {
       return;
     }
     final amount = (action['amount'] as num?)?.toDouble();
@@ -405,6 +423,18 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   String _response(Map<String, dynamic> action) {
+    final nestedActions = action['actions'];
+    if (nestedActions is List) {
+      final responses = nestedActions
+          .whereType<Map>()
+          .map((nested) => _response(Map<String, dynamic>.from(nested)))
+          .where((message) => message.isNotEmpty)
+          .toList();
+      if (responses.isEmpty) {
+        return 'Não consegui identificar as movimentações com segurança.';
+      }
+      return '${responses.length} movimentações processadas:\n• ${responses.join('\n• ')}';
+    }
     final answer = action['answer'];
     if (answer is String && answer.trim().isNotEmpty) return answer;
     if (action['intent'] == 'create_expense') {
@@ -429,9 +459,9 @@ class _ChatPageState extends State<ChatPage> {
 
   String _aiErrorMessage(String code) => switch (code) {
     'AI_CONFIGURATION_REQUIRED' =>
-      'A IA ainda não está configurada no Supabase. Falta validar a chave ou o modelo da OpenAI.',
+      'A IA ainda não está configurada no Supabase. Falta validar a chave ou o modelo do Gemini.',
     'AI_PROVIDER_UNAVAILABLE' =>
-      'A OpenAI recusou a solicitação. Verifique a chave, o modelo configurado e os créditos da conta OpenAI.',
+      'O Gemini recusou a solicitação. Verifique a chave, o modelo configurado e a cota da conta Google AI.',
     'ACTION_PERSISTENCE_FAILED' =>
       'A IA entendeu o comando, mas não conseguiu salvar o lançamento no banco. A função precisa ser publicada com a atualização atual.',
     'UNAUTHORIZED' => 'Sua sessão expirou. Saia e entre novamente.',
@@ -465,81 +495,101 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   @override
-  Widget build(BuildContext context) => Column(
-    children: [
-      Padding(
-        padding: const EdgeInsets.fromLTRB(28, 24, 28, 12),
-        child: Row(
-          children: [
-            const CircleAvatar(
-              backgroundColor: Color(0xFF52318E),
-              child: Icon(Icons.auto_awesome),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Assistente Financeiro',
-                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                      fontWeight: FontWeight.w700,
+  Widget build(BuildContext context) {
+    final compact = MediaQuery.sizeOf(context).width < 600;
+    return Column(
+      children: [
+        Padding(
+          padding: EdgeInsets.fromLTRB(
+            compact ? 16 : 28,
+            compact ? 14 : 24,
+            compact ? 16 : 28,
+            12,
+          ),
+          child: Row(
+            children: [
+              const CircleAvatar(
+                backgroundColor: Color(0xFF52318E),
+                child: Icon(Icons.auto_awesome),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Assistente Financeiro',
+                      style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
-                  ),
-                  Text(
-                    _token == null
-                        ? 'Modo de teste · entre para salvar na sua conta'
-                        : 'Conta conectada · dados sincronizados',
-                    style: const TextStyle(color: Colors.white70),
-                  ),
-                ],
-              ),
-            ),
-            if (_token == null)
-              OutlinedButton(
-                onPressed: _authenticate,
-                child: const Text('Entrar ou criar conta'),
-              ),
-          ],
-        ),
-      ),
-      Expanded(
-        child: _messages.isEmpty
-            ? _Empty(onSend: _send)
-            : ListView(
-                controller: _messagesController,
-                padding: const EdgeInsets.symmetric(horizontal: 28),
-                children: _messages
-                    .map((message) => _Bubble(message: message))
-                    .toList(),
-              ),
-      ),
-      if (_sending) const LinearProgressIndicator(minHeight: 2),
-      Padding(
-        padding: const EdgeInsets.all(24),
-        child: Row(
-          children: [
-            Expanded(
-              child: TextField(
-                controller: _input,
-                onSubmitted: (_) => _send(),
-                decoration: const InputDecoration(
-                  prefixIcon: Icon(Icons.auto_awesome),
-                  hintText: 'Ex.: Gastei R\$ 50 no mercado',
+                    Text(
+                      _token == null
+                          ? 'Modo de teste · entre para salvar na sua conta'
+                          : 'Conta conectada · dados sincronizados',
+                      style: const TextStyle(color: Colors.white70),
+                    ),
+                  ],
                 ),
               ),
-            ),
-            const SizedBox(width: 12),
-            FilledButton.icon(
-              onPressed: _sending ? null : _send,
-              icon: const Icon(Icons.arrow_upward),
-              label: const Text('Enviar'),
-            ),
-          ],
+              if (_token == null)
+                OutlinedButton(
+                  onPressed: _authenticate,
+                  child: const Text('Entrar ou criar conta'),
+                ),
+            ],
+          ),
         ),
-      ),
-    ],
-  );
+        Expanded(
+          child: _messages.isEmpty
+              ? _Empty(onSend: _send)
+              : ListView(
+                  controller: _messagesController,
+                  padding: EdgeInsets.symmetric(horizontal: compact ? 16 : 28),
+                  children: _messages
+                      .map((message) => _Bubble(message: message))
+                      .toList(),
+                ),
+        ),
+        if (_sending) const LinearProgressIndicator(minHeight: 2),
+        Padding(
+          padding: EdgeInsets.fromLTRB(
+            compact ? 12 : 24,
+            10,
+            compact ? 12 : 24,
+            compact ? 12 : 24,
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _input,
+                  onSubmitted: (_) => _send(),
+                  decoration: const InputDecoration(
+                    prefixIcon: Icon(Icons.auto_awesome),
+                    hintText: 'Ex.: Gastei R\$ 50 no mercado',
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              if (compact)
+                IconButton.filled(
+                  onPressed: _sending ? null : _send,
+                  tooltip: 'Enviar',
+                  icon: const Icon(Icons.arrow_upward),
+                )
+              else
+                FilledButton.icon(
+                  onPressed: _sending ? null : _send,
+                  icon: const Icon(Icons.arrow_upward),
+                  label: const Text('Enviar'),
+                ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
 }
 
 class _Empty extends StatelessWidget {
@@ -554,30 +604,34 @@ class _Empty extends StatelessWidget {
       'Comprei R\$ 1.500 de Bitcoin',
     ];
     return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const Icon(Icons.auto_awesome, size: 54, color: Color(0xFFC4B5FD)),
-          const SizedBox(height: 12),
-          Text(
-            'Como posso ajudar com suas finanças?',
-            style: Theme.of(context).textTheme.headlineSmall,
-          ),
-          const SizedBox(height: 18),
-          Wrap(
-            spacing: 10,
-            runSpacing: 10,
-            alignment: WrapAlignment.center,
-            children: items
-                .map(
-                  (item) => ActionChip(
-                    onPressed: () => onSend(item),
-                    label: Text(item),
-                  ),
-                )
-                .toList(),
-          ),
-        ],
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.auto_awesome, size: 54, color: Color(0xFFC4B5FD)),
+            const SizedBox(height: 12),
+            Text(
+              'Como posso ajudar com suas finanças?',
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.headlineSmall,
+            ),
+            const SizedBox(height: 18),
+            Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              alignment: WrapAlignment.center,
+              children: items
+                  .map(
+                    (item) => ActionChip(
+                      onPressed: () => onSend(item),
+                      label: Text(item),
+                    ),
+                  )
+                  .toList(),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -587,35 +641,42 @@ class _Bubble extends StatelessWidget {
   const _Bubble({required this.message});
   final _Message message;
   @override
-  Widget build(BuildContext context) => Align(
-    alignment: message.user ? Alignment.centerRight : Alignment.centerLeft,
-    child: Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(15),
-      constraints: const BoxConstraints(maxWidth: 660),
-      decoration: BoxDecoration(
-        color: message.user ? const Color(0xFF59368F) : const Color(0xFF211C29),
-        borderRadius: BorderRadius.circular(16),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            message.user ? 'Você' : 'Finance AI',
-            style: const TextStyle(fontWeight: FontWeight.w700),
-          ),
-          const SizedBox(height: 6),
-          Text(message.text),
-          if (message.action?['savedTransactionId'] != null)
-            Padding(
-              padding: const EdgeInsets.only(top: 10),
-              child: Text(
-                'Ação registrada · R\$ ${(message.action!['amount'] as num).toStringAsFixed(2).replaceAll('.', ',')}',
-                style: const TextStyle(color: Color(0xFF6EE7B7)),
-              ),
+  Widget build(BuildContext context) {
+    final compact = MediaQuery.sizeOf(context).width < 600;
+    return Align(
+      alignment: message.user ? Alignment.centerRight : Alignment.centerLeft,
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 12),
+        padding: const EdgeInsets.all(15),
+        constraints: BoxConstraints(
+          maxWidth: compact ? MediaQuery.sizeOf(context).width * 0.84 : 660,
+        ),
+        decoration: BoxDecoration(
+          color: message.user
+              ? const Color(0xFF59368F)
+              : const Color(0xFF211C29),
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              message.user ? 'Você' : 'Finance AI',
+              style: const TextStyle(fontWeight: FontWeight.w700),
             ),
-        ],
+            const SizedBox(height: 6),
+            Text(message.text),
+            if (message.action?['savedTransactionId'] != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 10),
+                child: Text(
+                  'Ação registrada · R\$ ${(message.action!['amount'] as num).toStringAsFixed(2).replaceAll('.', ',')}',
+                  style: const TextStyle(color: Color(0xFF6EE7B7)),
+                ),
+              ),
+          ],
+        ),
       ),
-    ),
-  );
+    );
+  }
 }

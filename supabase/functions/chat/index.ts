@@ -34,8 +34,19 @@ function isUuid(value: unknown): value is string {
   return typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
-function parseModelPayload(content: string): FinanceAction {
-  const candidate = JSON.parse(content) as Partial<FinanceAction>;
+function indexedIdempotencyKey(value: string, index: number) {
+  if (index === 0) return value;
+  const prefix = value.slice(0, -12);
+  const suffix = value.slice(-12);
+  const next = (BigInt(`0x${suffix}`) + BigInt(index)) & BigInt('0xffffffffffff');
+  return `${prefix}${next.toString(16).padStart(12, '0')}`;
+}
+
+function parseFinanceAction(value: unknown): FinanceAction {
+  if (value == null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('A IA não retornou uma ação válida.');
+  }
+  const candidate = value as Partial<FinanceAction>;
   if (typeof candidate.intent !== 'string' || !candidate.intent.trim()) {
     throw new Error('A IA não retornou um intent válido.');
   }
@@ -44,6 +55,8 @@ function parseModelPayload(content: string): FinanceAction {
     income: 'create_income',
     expense: 'create_expense',
     investment: 'create_investment',
+    savings: 'create_investment',
+    saving: 'create_investment',
     crypto_purchase: 'create_crypto_purchase',
     crypto_buy: 'create_crypto_purchase',
     crypto_sale: 'create_crypto_sale',
@@ -53,11 +66,45 @@ function parseModelPayload(content: string): FinanceAction {
     clear_account: 'reset_account',
   };
   const rawIntent = candidate.intent.trim().toLowerCase();
-  return {
-    ...candidate,
-    intent: aliases[rawIntent] ?? rawIntent,
-    confidence: typeof candidate.confidence === 'number' ? candidate.confidence : 0,
-  } as FinanceAction;
+  const intent = aliases[rawIntent] ?? rawIntent;
+  const allowedIntents = new Set([
+    'create_expense',
+    'create_income',
+    'create_investment',
+    'create_crypto_purchase',
+    'create_crypto_sale',
+    'create_crypto_conversion',
+    'reset_account',
+    'financial_guidance',
+    'needs_clarification',
+  ]);
+  if (!allowedIntents.has(intent)) throw new Error('Intent não permitido.');
+
+  const amount = typeof candidate.amount === 'number' &&
+      Number.isFinite(candidate.amount) && candidate.amount > 0
+    ? candidate.amount
+    : undefined;
+  const confidence = typeof candidate.confidence === 'number' && Number.isFinite(candidate.confidence)
+    ? Math.max(0, Math.min(1, candidate.confidence))
+    : 0;
+  return { ...candidate, intent, amount, confidence } as FinanceAction;
+}
+
+function parseModelPayload(content: string): FinanceAction[] {
+  const json = content
+    .trim()
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/, '');
+  const parsed = JSON.parse(json) as unknown;
+  const candidates = Array.isArray(parsed)
+    ? parsed
+    : parsed != null && typeof parsed === 'object' && Array.isArray((parsed as { actions?: unknown }).actions)
+      ? (parsed as { actions: unknown[] }).actions
+      : [parsed];
+  if (candidates.length === 0 || candidates.length > 10) {
+    throw new Error('Quantidade de ações inválida.');
+  }
+  return candidates.map(parseFinanceAction);
 }
 
 function transactionTypeFor(intent: string) {
@@ -257,7 +304,7 @@ async function directQuery(
 
 async function persistFinancialAction(admin: ReturnType<typeof createClient>, userId: string, action: FinanceAction, idempotencyKey: string) {
   const transactionType = transactionTypeFor(action.intent);
-  if (!transactionType || !action.amount || action.amount <= 0) return null;
+  if (!transactionType || !action.amount || action.amount <= 0 || action.confidence < 0.65) return null;
 
   let { data: wallet } = await admin.from('wallets').select('id').eq('user_id', userId).eq('is_archived', false).order('created_at').limit(1).maybeSingle();
   if (!wallet) {
@@ -351,7 +398,36 @@ Deno.serve(async (request) => {
     const { data, error } = await admin.from('chat_sessions').insert({ user_id: userId, title: payload.message.slice(0, 80) }).select('id').single();
     if (error) return response({ error: { code: 'SESSION_CREATION_FAILED' } }, 500);
     sessionId = data.id;
+  } else {
+    const { data: ownedSession, error } = await admin
+      .from('chat_sessions')
+      .select('id')
+      .eq('id', sessionId)
+      .eq('user_id', userId)
+      .is('deleted_at', null)
+      .maybeSingle();
+    if (error || !ownedSession) {
+      return response({ error: { code: 'SESSION_NOT_FOUND' } }, 404);
+    }
   }
+
+  const { data: recentMessages } = await admin
+    .from('chat_messages')
+    .select('role,content')
+    .eq('user_id', userId)
+    .eq('chat_session_id', sessionId)
+    .is('deleted_at', null)
+    .order('created_at', { ascending: false })
+    .limit(8);
+  const conversationHistory = (recentMessages ?? [])
+    .reverse()
+    .map((item) => {
+      const content = item.content as Record<string, unknown> | null;
+      const value = content?.text ?? content?.answer ?? content?.description ?? content?.intent;
+      return typeof value === 'string' ? `${item.role}: ${value}` : null;
+    })
+    .filter((item): item is string => item != null)
+    .join('\n');
 
   const { data: userMessage, error: messageError } = await admin
     .from('chat_messages')
@@ -367,10 +443,45 @@ Deno.serve(async (request) => {
     .single();
   if (actionError) return response({ error: { code: 'ACTION_CREATION_FAILED' } }, 500);
 
-  const instruction = 'Você é o parser do Finance AI. Responda exclusivamente um objeto JSON válido, sem markdown e sem texto extra. Intents permitidos: create_expense, create_income, create_investment, create_crypto_purchase, create_crypto_sale, create_crypto_conversion, reset_account e query_*. Use create_income para salário ou dinheiro recebido; use create_expense para gastos e pagamentos. Para cartão, preencha account como Cartão somente quando a pessoa mencionar cartão, fatura ou crédito explicitamente; em qualquer outro gasto, use Conta principal. Se a pessoa pedir para zerar, limpar ou reiniciar a conta, use reset_account sem amount. Extraia intent, amount, currency, category, description, date (YYYY-MM-DD), account, quantity, investment, bank, wallet e confidence (0 a 1). Nunca invente valores.';
-  // Listing every model is a second network call on every prompt. A low-latency
-  // Lite model is called directly, with a single fallback for free-tier outages.
-  const candidateModels = [...new Set([configuredModel ?? 'gemini-3.1-flash-lite', 'gemini-2.5-flash-lite'])];
+  const instruction = `Você é o assistente financeiro do Finance AI para usuários brasileiros.
+Responda exclusivamente com um objeto JSON válido, sem markdown ou texto fora do JSON.
+
+Intents permitidos:
+- create_expense: gasto, compra, pagamento ou conta que o usuário afirma que realizou.
+- create_income: salário, venda, reembolso ou dinheiro que o usuário afirma que recebeu.
+- create_investment: aporte em renda fixa, ações, ETF, FII, fundos ou previdência.
+- create_crypto_purchase, create_crypto_sale ou create_crypto_conversion.
+- reset_account: somente pedido explícito para zerar, limpar ou reiniciar a conta.
+- financial_guidance: pergunta, explicação, comparação, planejamento ou orientação financeira geral.
+- needs_clarification: falta informação essencial ou a frase é ambígua.
+
+Regras:
+1. Perguntas nunca criam lançamentos. Use financial_guidance e escreva a resposta em answer.
+2. Para criar um lançamento, o fato deve estar concluído e o valor precisa ter sido informado. Se faltar valor, use needs_clarification e pergunte em answer.
+3. Não transforme planos futuros, exemplos ou hipóteses em lançamentos.
+4. Entenda linguagem informal, abreviações, erros de digitação e valores brasileiros como "1.250,90", "50 conto" e "2k".
+5. Para cartão, use account="Cartão" apenas se houver menção explícita a cartão, crédito ou fatura; caso contrário use "Conta principal".
+6. Responda em português claro. Em orientações, seja educativo, prudente e não prometa retornos. Se a pergunta exigir dados atuais não fornecidos, explique essa limitação.
+7. Use o histórico apenas para resolver referências como "isso" ou "e ontem". Nunca reutilize silenciosamente um valor antigo em um novo lançamento.
+8. Extraia quando aplicável: intent, amount numérico em reais, currency, category, description, date (YYYY-MM-DD), account, quantity, investment, bank, wallet, answer e confidence (0 a 1). Nunca invente valores.
+9. Se a mensagem contiver duas ou mais movimentações, devolva {"actions":[...]} com uma ação separada para cada movimentação. Nunca some valores nem descarte uma delas.
+10. "Guardar", "poupar", "separar para reserva" ou colocar dinheiro em cofrinho/caixinha é create_investment; use o nome do destino em investment.
+
+Formato para uma ação: {"intent":"...","amount":0,"description":"...","confidence":0.0}.
+Formato para várias: {"actions":[{"intent":"..."},{"intent":"..."}]}.
+
+Data atual do servidor: ${new Date().toISOString()}.
+Histórico recente da mesma conta e conversa:
+${conversationHistory || '(sem histórico)'}
+
+Mensagem atual: ${payload.message}`;
+  // Use the current structured-data model first, retaining stable fallbacks for
+  // environments whose API key has not received the newest model yet.
+  const candidateModels = [...new Set([
+    configuredModel ?? 'gemini-3.5-flash-lite',
+    'gemini-3.1-flash-lite',
+    'gemini-2.5-flash-lite',
+  ])];
   let model = candidateModels[0];
   let geminiResponse: Response | undefined;
   for (const candidate of candidateModels) {
@@ -378,8 +489,11 @@ Deno.serve(async (request) => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-goog-api-key': geminiKey },
       body: JSON.stringify({
-        contents: [{ role: 'user', parts: [{ text: `${instruction}\n\nComando do usuário: ${payload.message}` }]}],
-        generationConfig: { temperature: 0.1, maxOutputTokens: 250 },
+        contents: [{ role: 'user', parts: [{ text: instruction }]}],
+        generationConfig: {
+          responseMimeType: 'application/json',
+          maxOutputTokens: 700,
+        },
       }),
     });
     geminiResponse = result;
@@ -400,8 +514,8 @@ Deno.serve(async (request) => {
 
   const modelResult = await geminiResponse.json() as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
   const modelText = modelResult.candidates?.[0]?.content?.parts?.map((part) => part.text ?? '').join('') ?? '';
-  let parsed: FinanceAction;
-  try { parsed = parseModelPayload(modelText); } catch {
+  let parsedActions: FinanceAction[];
+  try { parsedActions = parseModelPayload(modelText); } catch {
     await admin.from('ai_actions').update({ status: 'failed' }).eq('id', action.id);
     return response({ error: { code: 'INVALID_AI_RESPONSE' } }, 502);
   }
@@ -410,20 +524,47 @@ Deno.serve(async (request) => {
   // was actually mentioned (including today/yesterday), otherwise let the
   // persistence layer use the server timestamp instead of an invented date.
   const occurredDate = explicitOccurredDate(payload.message);
-  if (occurredDate) parsed.date = occurredDate;
-  else delete parsed.date;
+  parsedActions = parsedActions.map((parsed) => {
+    if (occurredDate) parsed.date = occurredDate;
+    else delete parsed.date;
+    if (transactionTypeFor(parsed.intent) && (!parsed.amount || parsed.confidence < 0.65)) {
+      return {
+        intent: 'needs_clarification',
+        answer: !parsed.amount
+          ? 'Qual foi o valor dessa movimentação?'
+          : 'Não entendi a movimentação com segurança. Pode descrevê-la de outra forma?',
+        confidence: parsed.confidence,
+      };
+    }
+    return parsed;
+  });
 
   try {
-    const transactionId = await persistFinancialAction(admin, userId, parsed, payload.idempotencyKey);
-    if (transactionId) parsed.savedTransactionId = transactionId;
+    for (let index = 0; index < parsedActions.length; index += 1) {
+      const parsed = parsedActions[index];
+      const transactionId = await persistFinancialAction(
+        admin,
+        userId,
+        parsed,
+        indexedIdempotencyKey(payload.idempotencyKey, index),
+      );
+      if (transactionId) parsed.savedTransactionId = transactionId;
+    }
   } catch (error) {
     await admin.from('ai_actions').update({ status: 'failed' }).eq('id', action.id);
     return response({ error: { code: 'ACTION_PERSISTENCE_FAILED' } }, 500);
   }
 
-  await admin.from('chat_messages').insert({ user_id: userId, chat_session_id: sessionId, role: 'assistant', content: parsed, model_name: model });
-  await admin.from('ai_actions').update({ intent: parsed.intent, result_json: parsed, status: 'processed', processed_at: new Date().toISOString() }).eq('id', action.id);
+  const result = parsedActions.length === 1
+    ? parsedActions[0]
+    : {
+      intent: 'multiple_actions',
+      actions: parsedActions,
+      confidence: Math.min(...parsedActions.map((item) => item.confidence)),
+    };
+  await admin.from('chat_messages').insert({ user_id: userId, chat_session_id: sessionId, role: 'assistant', content: result, model_name: model });
+  await admin.from('ai_actions').update({ intent: result.intent, result_json: result, status: 'processed', processed_at: new Date().toISOString() }).eq('id', action.id);
   await admin.from('chat_sessions').update({ last_message_at: new Date().toISOString() }).eq('id', sessionId);
 
-  return response({ sessionId, action: parsed, replayed: false });
+  return response({ sessionId, action: result, replayed: false });
 });

@@ -33,6 +33,6 @@ create policy audit_owner_select on public.audit_logs for select to authenticate
 alter table public.category_templates enable row level security;
 alter table public.investment_types enable row level security;
 alter table public.crypto_assets enable row level security;
-create policy category_templates_read on public.category_templates for select to authenticated using (deleted_at is null);
+create policy category_templates_read on public.category_templates for select to authenticated using (true);
 create policy investment_types_read on public.investment_types for select to authenticated using (deleted_at is null);
 create policy crypto_assets_read on public.crypto_assets for select to authenticated using (deleted_at is null);

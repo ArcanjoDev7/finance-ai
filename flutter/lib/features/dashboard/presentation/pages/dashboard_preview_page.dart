@@ -66,8 +66,13 @@ class CryptoItem {
 }
 
 class DashboardPreviewPage extends StatefulWidget {
-  const DashboardPreviewPage({super.key, required this.onSignOut});
+  const DashboardPreviewPage({
+    super.key,
+    required this.accessToken,
+    required this.onSignOut,
+  });
 
+  final String accessToken;
   final Future<void> Function() onSignOut;
 
   @override
@@ -80,6 +85,7 @@ class _DashboardPreviewPageState extends State<DashboardPreviewPage> {
   bool _sidebarCollapsed = false;
   FinancePage _page = FinancePage.dashboard;
   String _profileName = 'Minha conta';
+  String? _accountToken;
   final List<FinanceEntry> _entries = [];
   final List<InvestmentItem> _investments = [];
   final List<CryptoItem> _cryptos = [];
@@ -87,8 +93,14 @@ class _DashboardPreviewPageState extends State<DashboardPreviewPage> {
   @override
   void initState() {
     super.initState();
-    _restoreDashboard();
-    _restoreProfile();
+    _restoreAccountState();
+  }
+
+  Future<void> _restoreAccountState() async {
+    final token = widget.accessToken;
+    if (!mounted) return;
+    _accountToken = token;
+    await Future.wait([_restoreDashboard(token), _restoreProfile(token)]);
   }
 
   String get _profileInitials {
@@ -105,14 +117,12 @@ class _DashboardPreviewPageState extends State<DashboardPreviewPage> {
     return '${words.first[0]}${words.last[0]}'.toUpperCase();
   }
 
-  Future<void> _restoreProfile() async {
+  Future<void> _restoreProfile(String token) async {
     final client = SupabaseWebClient.instance;
-    final cachedName = await client.loadCachedProfileName();
+    final cachedName = await client.loadCachedProfileName(token);
     if (cachedName != null && cachedName.isNotEmpty && mounted) {
       setState(() => _profileName = cachedName);
     }
-    final token = await client.restoredSession();
-    if (token == null) return;
     try {
       final syncedName = await client.loadProfileName(token);
       if (syncedName != null && syncedName.isNotEmpty && mounted) {
@@ -132,6 +142,7 @@ class _DashboardPreviewPageState extends State<DashboardPreviewPage> {
         content: TextField(
           controller: controller,
           autofocus: true,
+          maxLength: 80,
           textCapitalization: TextCapitalization.words,
           decoration: const InputDecoration(
             labelText: 'Nome exibido',
@@ -151,12 +162,29 @@ class _DashboardPreviewPageState extends State<DashboardPreviewPage> {
       ),
     );
     controller.dispose();
-    final normalized = name?.trim() ?? '';
-    if (normalized.isEmpty || !mounted) return;
+    if (!mounted) return;
+    if (name == null) return;
+    final normalized = name.trim();
+    if (normalized.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Informe um nome para salvar o perfil.')),
+      );
+      return;
+    }
+    final token =
+        _accountToken ?? await SupabaseWebClient.instance.restoredSession();
+    if (token == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Sua sessão expirou. Entre novamente.')),
+        );
+      }
+      return;
+    }
     try {
       await SupabaseWebClient.instance.saveProfileName(
         normalized,
-        token: await SupabaseWebClient.instance.restoredSession(),
+        token: token,
       );
       if (mounted) setState(() => _profileName = normalized);
       if (mounted) {
@@ -166,11 +194,10 @@ class _DashboardPreviewPageState extends State<DashboardPreviewPage> {
       }
     } catch (_) {
       if (mounted) {
-        setState(() => _profileName = normalized);
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text(
-              'O nome foi salvo neste navegador e será sincronizado ao reconectar.',
+              'Não foi possível atualizar o perfil. Confira a conexão e tente novamente.',
             ),
           ),
         );
@@ -178,11 +205,9 @@ class _DashboardPreviewPageState extends State<DashboardPreviewPage> {
     }
   }
 
-  Future<void> _restoreDashboard() async {
-    final cached = await SupabaseWebClient.instance.loadLocalDashboard();
+  Future<void> _restoreDashboard(String token) async {
+    final cached = await SupabaseWebClient.instance.loadLocalDashboard(token);
     if (cached != null && mounted) _applyLocalDashboard(cached);
-    final token = await SupabaseWebClient.instance.restoredSession();
-    if (token == null) return;
     try {
       final rows = await SupabaseWebClient.instance.loadTimeline(token);
       if (!mounted) return;
@@ -236,19 +261,21 @@ class _DashboardPreviewPageState extends State<DashboardPreviewPage> {
           );
         }
       }
-      if (rows.isNotEmpty) {
-        setState(() {
-          _entries
-            ..clear()
-            ..addAll(entries);
-          _investments
-            ..clear()
-            ..addAll(investments);
-          _cryptos
-            ..clear()
-            ..addAll(cryptos);
-        });
-      }
+      // The authenticated API is authoritative even when it returns no rows.
+      // Keeping a cache in that case can expose values fetched before an
+      // account switch or before RLS was enabled.
+      setState(() {
+        _entries
+          ..clear()
+          ..addAll(entries);
+        _investments
+          ..clear()
+          ..addAll(investments);
+        _cryptos
+          ..clear()
+          ..addAll(cryptos);
+      });
+      await _persistLocalDashboard();
     } catch (_) {
       // The locally cached state remains available while an offline request fails.
     }
@@ -305,44 +332,87 @@ class _DashboardPreviewPageState extends State<DashboardPreviewPage> {
     });
   }
 
-  Future<void> _persistLocalDashboard() =>
-      SupabaseWebClient.instance.saveLocalDashboard({
-        'entries': _entries
-            .map(
-              (item) => {
-                'id': item.id,
-                'description': item.description,
-                'category': item.category,
-                'amount': item.amount,
-                'kind': item.kind.name,
-                'date': item.date.toIso8601String(),
-                'isCard': item.isCard,
-              },
-            )
-            .toList(),
-        'investments': _investments
-            .map(
-              (item) => {
-                'name': item.name,
-                'institution': item.institution,
-                'type': item.type,
-                'amount': item.amount,
-                'yieldDescription': item.yieldDescription,
-              },
-            )
-            .toList(),
-        'cryptos': _cryptos
-            .map(
-              (item) => {
-                'asset': item.asset,
-                'amount': item.amount,
-                'operation': item.operation,
-              },
-            )
-            .toList(),
-      });
+  Future<void> _persistLocalDashboard() async {
+    final token = _accountToken;
+    if (token == null) return;
+    await SupabaseWebClient.instance.saveLocalDashboard(token, {
+      'entries': _entries
+          .map(
+            (item) => {
+              'id': item.id,
+              'description': item.description,
+              'category': item.category,
+              'amount': item.amount,
+              'kind': item.kind.name,
+              'date': item.date.toIso8601String(),
+              'isCard': item.isCard,
+            },
+          )
+          .toList(),
+      'investments': _investments
+          .map(
+            (item) => {
+              'name': item.name,
+              'institution': item.institution,
+              'type': item.type,
+              'amount': item.amount,
+              'yieldDescription': item.yieldDescription,
+            },
+          )
+          .toList(),
+      'cryptos': _cryptos
+          .map(
+            (item) => {
+              'asset': item.asset,
+              'amount': item.amount,
+              'operation': item.operation,
+            },
+          )
+          .toList(),
+    });
+  }
 
   void _go(FinancePage page) => setState(() => _page = page);
+
+  Future<void> _showMobileMoreMenu() async {
+    final selected = await showModalBottomSheet<FinancePage>(
+      context: context,
+      showDragHandle: true,
+      useSafeArea: true,
+      builder: (sheetContext) => Padding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              'Mais recursos',
+              style: Theme.of(sheetContext).textTheme.titleLarge,
+            ),
+            const SizedBox(height: 12),
+            for (final item in const [
+              (FinancePage.crypto, Icons.currency_bitcoin, 'Criptomoedas'),
+              (FinancePage.cards, Icons.credit_card_outlined, 'Cartões'),
+              (FinancePage.goals, Icons.flag_outlined, 'Metas'),
+              (FinancePage.reports, Icons.insights_outlined, 'Relatórios'),
+              (FinancePage.settings, Icons.person_outline, 'Perfil e ajustes'),
+            ])
+              ListTile(
+                leading: Icon(item.$2),
+                title: Text(item.$3),
+                trailing: const Icon(Icons.chevron_right),
+                selected: _page == item.$1,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                onTap: () => Navigator.pop(sheetContext, item.$1),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (selected != null && mounted) _go(selected);
+  }
+
   void _addEntry(FinanceEntry entry) {
     setState(() => _entries.insert(0, entry));
     _persistLocalDashboard();
@@ -462,7 +532,7 @@ class _DashboardPreviewPageState extends State<DashboardPreviewPage> {
         return;
       }
       await SupabaseWebClient.instance.resetAccount(token, _idempotencyKey());
-      await SupabaseWebClient.instance.clearLocalDashboard();
+      await SupabaseWebClient.instance.clearLocalDashboard(token);
       if (!mounted) return;
       setState(() {
         _entries.clear();
@@ -528,7 +598,9 @@ class _DashboardPreviewPageState extends State<DashboardPreviewPage> {
 
   @override
   Widget build(BuildContext context) {
-    final desktop = MediaQuery.sizeOf(context).width >= AppBreakpoints.expanded;
+    final width = MediaQuery.sizeOf(context).width;
+    final mobile = width < AppBreakpoints.medium;
+    final desktop = width >= AppBreakpoints.expanded;
     final content = switch (_page) {
       FinancePage.dashboard => _DashboardContent(
         entries: _entries,
@@ -590,6 +662,8 @@ class _DashboardPreviewPageState extends State<DashboardPreviewPage> {
       key: _scaffoldKey,
       drawer: desktop
           ? null
+          : mobile
+          ? null
           : Drawer(
               child: _SideNavigation(
                 selected: _page,
@@ -606,7 +680,11 @@ class _DashboardPreviewPageState extends State<DashboardPreviewPage> {
         hideValues: _hideValues,
         profileInitials: _profileInitials,
         onTogglePrivacy: () => setState(() => _hideValues = !_hideValues),
-        onMenu: desktop ? null : () => _scaffoldKey.currentState?.openDrawer(),
+        onProfile: () => _go(FinancePage.settings),
+        mobile: mobile,
+        onMenu: desktop || mobile
+            ? null
+            : () => _scaffoldKey.currentState?.openDrawer(),
       ),
       body: Row(
         children: [
@@ -640,28 +718,38 @@ class _DashboardPreviewPageState extends State<DashboardPreviewPage> {
           ),
         ],
       ),
+      bottomNavigationBar: mobile
+          ? _MobileNavigation(
+              selected: _page,
+              onSelected: _go,
+              onMore: _showMobileMoreMenu,
+            )
+          : null,
       floatingActionButton: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          if (_page != FinancePage.assistant)
+          if (!mobile && _page != FinancePage.assistant)
             FloatingActionButton.small(
               heroTag: 'assistant-fab',
               onPressed: () => _go(FinancePage.assistant),
               tooltip: 'Abrir Assistente IA',
               child: const Icon(Icons.auto_awesome),
             ),
-          if (!desktop && _page != FinancePage.assistant)
-            const SizedBox(height: 12),
-          if (!desktop && _page != FinancePage.assistant)
+          if (mobile &&
+              _page != FinancePage.assistant &&
+              _page != FinancePage.settings)
             FloatingActionButton.extended(
               heroTag: 'entry-fab',
               onPressed: _showEntryForm,
               icon: const Icon(Icons.add),
-              label: const Text('Movimentação'),
+              label: const Text('Adicionar'),
             ),
         ],
       ),
+      floatingActionButtonLocation: mobile
+          ? FloatingActionButtonLocation.endFloat
+          : FloatingActionButtonLocation.endFloat,
     );
   }
 }
@@ -672,15 +760,19 @@ class _TopBar extends StatelessWidget implements PreferredSizeWidget {
     required this.hideValues,
     required this.profileInitials,
     required this.onTogglePrivacy,
+    required this.onProfile,
+    required this.mobile,
     this.onMenu,
   });
   final FinancePage page;
   final bool hideValues;
   final String profileInitials;
   final VoidCallback onTogglePrivacy;
+  final VoidCallback onProfile;
+  final bool mobile;
   final VoidCallback? onMenu;
   @override
-  Size get preferredSize => const Size.fromHeight(64);
+  Size get preferredSize => Size.fromHeight(mobile ? 56 : 64);
   @override
   Widget build(BuildContext context) => AppBar(
     leading: onMenu == null
@@ -703,19 +795,21 @@ class _TopBar extends StatelessWidget implements PreferredSizeWidget {
             ),
           ),
         ),
-      const SizedBox(width: 8),
-      IconButton(
-        tooltip: 'Notificações',
-        icon: const Badge(
-          smallSize: 7,
-          child: Icon(Icons.notifications_none_rounded),
-        ),
-        onPressed: () => ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Você está em dia. Sem novas notificações.'),
+      if (!mobile) ...[
+        const SizedBox(width: 8),
+        IconButton(
+          tooltip: 'Notificações',
+          icon: const Badge(
+            smallSize: 7,
+            child: Icon(Icons.notifications_none_rounded),
+          ),
+          onPressed: () => ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Você está em dia. Sem novas notificações.'),
+            ),
           ),
         ),
-      ),
+      ],
       IconButton(
         tooltip: hideValues ? 'Mostrar valores' : 'Ocultar valores',
         icon: Icon(
@@ -725,9 +819,84 @@ class _TopBar extends StatelessWidget implements PreferredSizeWidget {
         ),
         onPressed: onTogglePrivacy,
       ),
-      Padding(
-        padding: const EdgeInsets.only(right: 12),
-        child: CircleAvatar(radius: 17, child: Text(profileInitials)),
+      IconButton(
+        tooltip: 'Perfil',
+        onPressed: onProfile,
+        padding: const EdgeInsets.only(right: 8),
+        icon: CircleAvatar(radius: 16, child: Text(profileInitials)),
+      ),
+    ],
+  );
+}
+
+class _MobileNavigation extends StatelessWidget {
+  const _MobileNavigation({
+    required this.selected,
+    required this.onSelected,
+    required this.onMore,
+  });
+
+  final FinancePage selected;
+  final ValueChanged<FinancePage> onSelected;
+  final VoidCallback onMore;
+
+  int get _index => switch (selected) {
+    FinancePage.dashboard => 0,
+    FinancePage.transactions => 1,
+    FinancePage.assistant => 2,
+    FinancePage.investments => 3,
+    _ => 4,
+  };
+
+  @override
+  Widget build(BuildContext context) => NavigationBar(
+    selectedIndex: _index,
+    height: 68,
+    labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
+    onDestinationSelected: (index) {
+      switch (index) {
+        case 0:
+          onSelected(FinancePage.dashboard);
+          return;
+        case 1:
+          onSelected(FinancePage.transactions);
+          return;
+        case 2:
+          onSelected(FinancePage.assistant);
+          return;
+        case 3:
+          onSelected(FinancePage.investments);
+          return;
+        case 4:
+          onMore();
+          return;
+      }
+    },
+    destinations: const [
+      NavigationDestination(
+        icon: Icon(Icons.home_outlined),
+        selectedIcon: Icon(Icons.home),
+        label: 'Início',
+      ),
+      NavigationDestination(
+        icon: Icon(Icons.receipt_long_outlined),
+        selectedIcon: Icon(Icons.receipt_long),
+        label: 'Movimentos',
+      ),
+      NavigationDestination(
+        icon: Icon(Icons.auto_awesome_outlined),
+        selectedIcon: Icon(Icons.auto_awesome),
+        label: 'IA',
+      ),
+      NavigationDestination(
+        icon: Icon(Icons.show_chart_outlined),
+        selectedIcon: Icon(Icons.show_chart),
+        label: 'Investir',
+      ),
+      NavigationDestination(
+        icon: Icon(Icons.grid_view_outlined),
+        selectedIcon: Icon(Icons.grid_view),
+        label: 'Mais',
       ),
     ],
   );
@@ -898,7 +1067,7 @@ class _DashboardContent extends StatelessWidget {
       (sum, item) => sum + item.amount,
     );
     return ListView(
-      padding: const EdgeInsets.all(28),
+      padding: _pagePadding(context),
       children: [
         const _PageHeader(
           title: 'Visão geral',
@@ -1074,7 +1243,7 @@ class _TransactionsPageState extends State<_TransactionsPage> {
         )
         .toList();
     return ListView(
-      padding: const EdgeInsets.all(28),
+      padding: _pagePadding(context),
       children: [
         _PageHeader(
           title: 'Movimentações',
@@ -1163,7 +1332,7 @@ class _InvestmentsPage extends StatelessWidget {
   Widget build(BuildContext context) {
     final total = items.fold(0.0, (sum, item) => sum + item.amount);
     return ListView(
-      padding: const EdgeInsets.all(28),
+      padding: _pagePadding(context),
       children: [
         _PageHeader(
           title: 'Investimentos',
@@ -1242,7 +1411,7 @@ class _CryptoPage extends StatelessWidget {
           sum + (item.operation == 'Venda' ? -item.amount : item.amount),
     );
     return ListView(
-      padding: const EdgeInsets.all(28),
+      padding: _pagePadding(context),
       children: [
         _PageHeader(
           title: 'Criptomoedas',
@@ -1313,7 +1482,7 @@ class _GoalsPage extends StatelessWidget {
         .toList();
     final total = fixed.fold(0.0, (sum, item) => sum + item.amount);
     return ListView(
-      padding: const EdgeInsets.all(28),
+      padding: _pagePadding(context),
       children: [
         _PageHeader(
           title: 'Metas',
@@ -1403,7 +1572,7 @@ class _CardsPage extends StatelessWidget {
     final invoice = cardEntries.fold(0.0, (sum, item) => sum + item.amount);
     const limit = 5000.0;
     return ListView(
-      padding: const EdgeInsets.all(28),
+      padding: _pagePadding(context),
       children: [
         _PageHeader(
           title: 'Cartões',
@@ -1477,7 +1646,7 @@ class _ReportsPage extends StatelessWidget {
         .where((item) => item.kind == EntryKind.expense)
         .fold(0.0, (sum, item) => sum + item.amount);
     return ListView(
-      padding: const EdgeInsets.all(28),
+      padding: _pagePadding(context),
       children: [
         _PageHeader(
           title: 'Relatórios',
@@ -1548,7 +1717,7 @@ class _SettingsPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => ListView(
-    padding: const EdgeInsets.all(28),
+    padding: _pagePadding(context),
     children: [
       const _PageHeader(
         title: 'Configurações',
@@ -1600,14 +1769,15 @@ class _SettingsPage extends StatelessWidget {
               value: hideValues,
               onChanged: (_) => onTogglePrivacy(),
             ),
-            SwitchListTile.adaptive(
-              contentPadding: EdgeInsets.zero,
-              secondary: const Icon(Icons.vertical_split_outlined),
-              title: const Text('Menu compacto'),
-              subtitle: const Text('Reduz a barra lateral em telas grandes.'),
-              value: sidebarCollapsed,
-              onChanged: (_) => onToggleSidebar(),
-            ),
+            if (MediaQuery.sizeOf(context).width >= AppBreakpoints.expanded)
+              SwitchListTile.adaptive(
+                contentPadding: EdgeInsets.zero,
+                secondary: const Icon(Icons.vertical_split_outlined),
+                title: const Text('Menu compacto'),
+                subtitle: const Text('Reduz a barra lateral em telas grandes.'),
+                value: sidebarCollapsed,
+                onChanged: (_) => onToggleSidebar(),
+              ),
           ],
         ),
       ),
@@ -1662,28 +1832,31 @@ class _ReportRow extends StatelessWidget {
   final bool hideValues;
   final Color color;
   @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.symmetric(vertical: 10),
-    child: Row(
-      children: [
-        Expanded(child: Text(label)),
-        SizedBox(
-          width: 130,
-          child: LinearProgressIndicator(
-            value: value <= 0 ? 0 : (value / 10000).clamp(0.0, 1.0),
-            color: color,
-            backgroundColor: const Color(0xFF342E3D),
+  Widget build(BuildContext context) {
+    final compact = MediaQuery.sizeOf(context).width < AppBreakpoints.compact;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 10),
+      child: Row(
+        children: [
+          Expanded(child: Text(label)),
+          SizedBox(
+            width: compact ? 64 : 130,
+            child: LinearProgressIndicator(
+              value: value <= 0 ? 0 : (value / 10000).clamp(0.0, 1.0),
+              color: color,
+              backgroundColor: const Color(0xFF342E3D),
+            ),
           ),
-        ),
-        const SizedBox(width: 16),
-        _FinancialValue(
-          value: value,
-          hidden: hideValues,
-          style: Theme.of(context).textTheme.titleMedium,
-        ),
-      ],
-    ),
-  );
+          SizedBox(width: compact ? 8 : 16),
+          _FinancialValue(
+            value: value,
+            hidden: hideValues,
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class _CashflowChart extends StatelessWidget {
@@ -1905,9 +2078,13 @@ class _PageHeader extends StatelessWidget {
         children: [
           Text(
             title,
-            style: Theme.of(
-              context,
-            ).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.w700),
+            style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+              fontSize:
+                  MediaQuery.sizeOf(context).width < AppBreakpoints.compact
+                  ? 24
+                  : null,
+              fontWeight: FontWeight.w700,
+            ),
           ),
           const SizedBox(height: 5),
           Text(
@@ -1929,32 +2106,35 @@ class _Panel extends StatelessWidget {
   final Widget child;
   final Widget? action;
   @override
-  Widget build(BuildContext context) => Card(
-    color: const Color(0xCC1B1722),
-    child: Padding(
-      padding: const EdgeInsets.all(22),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  title,
-                  style: Theme.of(
-                    context,
-                  ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w600),
+  Widget build(BuildContext context) {
+    final compact = MediaQuery.sizeOf(context).width < AppBreakpoints.compact;
+    return Card(
+      color: const Color(0xCC1B1722),
+      child: Padding(
+        padding: EdgeInsets.all(compact ? 16 : 22),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    title,
+                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
                 ),
-              ),
-              if (action != null) action!,
-            ],
-          ),
-          const SizedBox(height: 16),
-          child,
-        ],
+                if (action != null) action!,
+              ],
+            ),
+            const SizedBox(height: 16),
+            child,
+          ],
+        ),
       ),
-    ),
-  );
+    );
+  }
 }
 
 class _HeroCard extends StatelessWidget {
@@ -1967,48 +2147,51 @@ class _HeroCard extends StatelessWidget {
   final bool hideValues;
   final String label;
   @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.all(28),
-    decoration: BoxDecoration(
-      borderRadius: BorderRadius.circular(24),
-      gradient: const LinearGradient(
-        colors: [Color(0xFF41247D), Color(0xFF112E63)],
-      ),
-      boxShadow: AppShadows.card,
-    ),
-    child: Wrap(
-      alignment: WrapAlignment.spaceBetween,
-      crossAxisAlignment: WrapCrossAlignment.end,
-      spacing: 20,
-      runSpacing: 20,
-      children: [
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              label,
-              style: Theme.of(
-                context,
-              ).textTheme.titleMedium?.copyWith(color: Colors.white70),
-            ),
-            const SizedBox(height: 10),
-            _FinancialValue(
-              value: value,
-              hidden: hideValues,
-              style: Theme.of(
-                context,
-              ).textTheme.displaySmall?.copyWith(fontWeight: FontWeight.w800),
-            ),
-            const SizedBox(height: 8),
-            const Text(
-              'Atualizado agora · período atual',
-              style: TextStyle(color: Colors.white70),
-            ),
-          ],
+  Widget build(BuildContext context) {
+    final compact = MediaQuery.sizeOf(context).width < AppBreakpoints.compact;
+    return Container(
+      padding: EdgeInsets.all(compact ? 20 : 28),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(24),
+        gradient: const LinearGradient(
+          colors: [Color(0xFF41247D), Color(0xFF112E63)],
         ),
-      ],
-    ),
-  );
+        boxShadow: AppShadows.card,
+      ),
+      child: Wrap(
+        alignment: WrapAlignment.spaceBetween,
+        crossAxisAlignment: WrapCrossAlignment.end,
+        spacing: 20,
+        runSpacing: 20,
+        children: [
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                label,
+                style: Theme.of(
+                  context,
+                ).textTheme.titleMedium?.copyWith(color: Colors.white70),
+              ),
+              const SizedBox(height: 10),
+              _FinancialValue(
+                value: value,
+                hidden: hideValues,
+                style: Theme.of(
+                  context,
+                ).textTheme.displaySmall?.copyWith(fontWeight: FontWeight.w800),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Atualizado agora · período atual',
+                style: TextStyle(color: Colors.white70),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class _MetricCard extends StatelessWidget {
@@ -2025,27 +2208,30 @@ class _MetricCard extends StatelessWidget {
   final Color color;
   final bool hideValues;
   @override
-  Widget build(BuildContext context) => Card(
-    color: const Color(0xD91B1722),
-    child: Padding(
-      padding: const EdgeInsets.all(20),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Icon(icon, color: color),
-          Text(label, style: const TextStyle(color: Colors.white70)),
-          _FinancialValue(
-            value: value,
-            hidden: hideValues,
-            style: Theme.of(
-              context,
-            ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w700),
-          ),
-        ],
+  Widget build(BuildContext context) {
+    final compact = MediaQuery.sizeOf(context).width < AppBreakpoints.compact;
+    return Card(
+      color: const Color(0xD91B1722),
+      child: Padding(
+        padding: EdgeInsets.all(compact ? 16 : 20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Icon(icon, color: color),
+            Text(label, style: const TextStyle(color: Colors.white70)),
+            _FinancialValue(
+              value: value,
+              hidden: hideValues,
+              style: Theme.of(
+                context,
+              ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w700),
+            ),
+          ],
+        ),
       ),
-    ),
-  );
+    );
+  }
 }
 
 class _EntryRow extends StatelessWidget {
@@ -2440,6 +2626,11 @@ class _FormSheet extends StatelessWidget {
     ),
   );
 }
+
+EdgeInsets _pagePadding(BuildContext context) =>
+    MediaQuery.sizeOf(context).width < AppBreakpoints.compact
+    ? const EdgeInsets.fromLTRB(16, 14, 16, 24)
+    : const EdgeInsets.all(28);
 
 String _date(DateTime value) =>
     '${value.day.toString().padLeft(2, '0')}/${value.month.toString().padLeft(2, '0')}';
