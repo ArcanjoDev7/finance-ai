@@ -5,11 +5,13 @@ import 'package:flutter/material.dart';
 class ChatPage extends StatefulWidget {
   const ChatPage({
     super.key,
+    required this.session,
     required this.onTransactionCreated,
     required this.onInvestmentCreated,
     required this.onCryptoCreated,
     required this.onAccountReset,
   });
+  final ChatSessionState session;
   final ValueChanged<FinanceEntry> onTransactionCreated;
   final ValueChanged<InvestmentItem> onInvestmentCreated;
   final ValueChanged<CryptoItem> onCryptoCreated;
@@ -18,8 +20,13 @@ class ChatPage extends StatefulWidget {
   State<ChatPage> createState() => _ChatPageState();
 }
 
-class _Message {
-  const _Message(this.text, {this.user = false, this.action});
+class ChatSessionState {
+  final List<ChatMessage> messages = [];
+  String? sessionId;
+}
+
+class ChatMessage {
+  const ChatMessage(this.text, {this.user = false, this.action});
   final String text;
   final bool user;
   final Map<String, dynamic>? action;
@@ -28,10 +35,10 @@ class _Message {
 class _ChatPageState extends State<ChatPage> {
   final _input = TextEditingController();
   final _messagesController = ScrollController();
-  final _messages = <_Message>[];
   String? _token;
-  String? _sessionId;
   bool _sending = false;
+
+  List<ChatMessage> get _messages => widget.session.messages;
 
   @override
   void initState() {
@@ -39,6 +46,7 @@ class _ChatPageState extends State<ChatPage> {
     SupabaseWebClient.instance.restoredSession().then((value) {
       if (mounted && value != null) setState(() => _token = value);
     });
+    if (_messages.isNotEmpty) _scrollToLatestMessage();
   }
 
   @override
@@ -173,7 +181,7 @@ class _ChatPageState extends State<ChatPage> {
     final text = (suggestion ?? _input.text).trim();
     if (text.isEmpty || _sending) return;
     setState(() {
-      _messages.add(_Message(text, user: true));
+      _messages.add(ChatMessage(text, user: true));
       _input.clear();
       _sending = true;
     });
@@ -186,10 +194,13 @@ class _ChatPageState extends State<ChatPage> {
         final response = await SupabaseWebClient.instance.chat(_token!, {
           'message': text,
           'idempotencyKey': _key(),
-          if (_sessionId != null) 'sessionId': _sessionId,
+          if (widget.session.sessionId != null)
+            'sessionId': widget.session.sessionId,
         });
         final returnedSessionId = response['sessionId'];
-        if (returnedSessionId is String) _sessionId = returnedSessionId;
+        if (returnedSessionId is String) {
+          widget.session.sessionId = returnedSessionId;
+        }
         action = Map<String, dynamic>.from(
           response['action'] as Map? ?? const {},
         );
@@ -197,7 +208,7 @@ class _ChatPageState extends State<ChatPage> {
       _apply(action);
       if (mounted) {
         setState(
-          () => _messages.add(_Message(_response(action), action: action)),
+          () => _messages.add(ChatMessage(_response(action), action: action)),
         );
         _scrollToLatestMessage();
       }
@@ -208,7 +219,7 @@ class _ChatPageState extends State<ChatPage> {
           setState(() {
             _token = null;
             _messages.add(
-              const _Message(
+              const ChatMessage(
                 'Sua sessão expirou. Entre novamente para continuar salvando e consultando os dados da sua conta.',
               ),
             );
@@ -219,7 +230,7 @@ class _ChatPageState extends State<ChatPage> {
       }
       if (mounted) {
         setState(
-          () => _messages.add(_Message(_aiErrorMessageWithProvider(error))),
+          () => _messages.add(ChatMessage(_aiErrorMessageWithProvider(error))),
         );
         _scrollToLatestMessage();
       }
@@ -227,7 +238,7 @@ class _ChatPageState extends State<ChatPage> {
       if (mounted) {
         setState(
           () => _messages.add(
-            const _Message(
+            const ChatMessage(
               'Não consegui processar esse comando. Tente novamente.',
             ),
           ),
@@ -248,7 +259,10 @@ class _ChatPageState extends State<ChatPage> {
         source.contains('conta')) {
       return {'intent': 'reset_account'};
     }
-    if (source.contains('gastei') || source.contains('paguei')) {
+    if (source.contains('gastei') ||
+        source.contains('paguei') ||
+        source.contains('comprei') ||
+        source.contains('adquiri')) {
       return {
         'intent': 'create_expense',
         'amount': amount,
@@ -639,7 +653,7 @@ class _Empty extends StatelessWidget {
 
 class _Bubble extends StatelessWidget {
   const _Bubble({required this.message});
-  final _Message message;
+  final ChatMessage message;
   @override
   Widget build(BuildContext context) {
     final compact = MediaQuery.sizeOf(context).width < 600;

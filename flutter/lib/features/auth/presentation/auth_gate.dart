@@ -7,6 +7,9 @@ import 'package:finance_ai/features/dashboard/presentation/pages/dashboard_previ
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
+const _passwordRecoveryRedirectUrl =
+    'https://arcanjodev7.github.io/finance-ai/';
+
 class AuthGate extends StatefulWidget {
   const AuthGate({super.key});
 
@@ -213,10 +216,9 @@ class _AuthPageState extends State<_AuthPage> {
     }
     setState(() => _loading = true);
     try {
-      final redirectTo = Uri.base.replace(fragment: '', query: '').toString();
       await SupabaseWebClient.instance.requestPasswordReset(
         email,
-        redirectTo: redirectTo,
+        redirectTo: _passwordRecoveryRedirectUrl,
       );
       _message(
         'Se esse e-mail estiver cadastrado, você receberá um link para criar uma nova senha.',

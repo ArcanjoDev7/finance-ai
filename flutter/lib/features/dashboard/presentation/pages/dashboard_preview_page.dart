@@ -89,6 +89,7 @@ class _DashboardPreviewPageState extends State<DashboardPreviewPage> {
   final List<FinanceEntry> _entries = [];
   final List<InvestmentItem> _investments = [];
   final List<CryptoItem> _cryptos = [];
+  final ChatSessionState _chatSession = ChatSessionState();
 
   @override
   void initState() {
@@ -640,6 +641,7 @@ class _DashboardPreviewPageState extends State<DashboardPreviewPage> {
         hideValues: _hideValues,
       ),
       FinancePage.assistant => ChatPage(
+        session: _chatSession,
         onTransactionCreated: _addEntry,
         onInvestmentCreated: _addInvestment,
         onCryptoCreated: _addCrypto,

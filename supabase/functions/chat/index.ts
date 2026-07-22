@@ -128,6 +128,58 @@ function normalizeText(value: string) {
     .toLowerCase();
 }
 
+function parseBrlAmount(value: string) {
+  const matches = [...value.matchAll(/(?:r\$\s*)?(\d[\d.,]*)/gi)];
+  if (matches.length === 0) return undefined;
+  const preferred = [...matches].reverse().find((match) => /r\$/i.test(match[0])) ?? matches.at(-1);
+  const raw = preferred?.[1];
+  if (!raw) return undefined;
+  const hasDot = raw.includes('.');
+  const hasComma = raw.includes(',');
+  let normalized = raw;
+  if (hasDot && hasComma) {
+    const decimalSeparator = raw.lastIndexOf('.') > raw.lastIndexOf(',') ? '.' : ',';
+    normalized = raw
+      .replaceAll(decimalSeparator === '.' ? ',' : '.', '')
+      .replace(decimalSeparator, '.');
+  } else if (hasDot || hasComma) {
+    const separator = hasDot ? '.' : ',';
+    const fractionSize = raw.length - raw.lastIndexOf(separator) - 1;
+    normalized = fractionSize === 3 ? raw.replaceAll(separator, '') : raw.replace(separator, '.');
+  }
+  const amount = Number(normalized);
+  return Number.isFinite(amount) && amount > 0 ? amount : undefined;
+}
+
+function directCompletedPurchase(message: string): FinanceAction | null {
+  const text = normalizeText(message);
+  if (!/\b(comprei|adquiri|gastei|paguei)\b/.test(text)) return null;
+  if (/\b(quanto|como|posso|devo|vou|quero|pretendo)\b/.test(text) || text.includes('?')) return null;
+  if (/\b(bitcoin|btc|ethereum|eth|cripto|cdb|lci|lca|tesouro|acao|acoes|etf|fii|fundo)\b/.test(text)) {
+    return null;
+  }
+  const amount = parseBrlAmount(message);
+  if (!amount) return null;
+  const category = /\b(mercado|supermercado|comida|lanche|restaurante)\b/.test(text)
+    ? 'Alimentação'
+    : /\b(farmacia|remedio|consulta|medico)\b/.test(text)
+      ? 'Saúde'
+      : /\b(uber|onibus|combustivel|gasolina|transporte)\b/.test(text)
+        ? 'Transporte'
+        : /\b(roupa|calcado|sapato|shopping)\b/.test(text)
+          ? 'Compras'
+          : 'Outros';
+  return {
+    intent: 'create_expense',
+    amount,
+    currency: 'BRL',
+    category,
+    description: message.trim(),
+    account: /\b(cartao|credito|fatura)\b/.test(text) ? 'Cartão' : 'Conta principal',
+    confidence: 1,
+  };
+}
+
 function isoDate(value: Date) {
   return value.toISOString().slice(0, 10);
 }
@@ -442,6 +494,40 @@ Deno.serve(async (request) => {
     .select('id')
     .single();
   if (actionError) return response({ error: { code: 'ACTION_CREATION_FAILED' } }, 500);
+
+  const completedPurchase = directCompletedPurchase(payload.message);
+  if (completedPurchase) {
+    const occurredDate = explicitOccurredDate(payload.message);
+    if (occurredDate) completedPurchase.date = occurredDate;
+    try {
+      const transactionId = await persistFinancialAction(
+        admin,
+        userId,
+        completedPurchase,
+        payload.idempotencyKey,
+      );
+      if (!transactionId) throw new Error('TRANSACTION_CREATION_FAILED');
+      completedPurchase.savedTransactionId = transactionId;
+    } catch {
+      await admin.from('ai_actions').update({ status: 'failed' }).eq('id', action.id);
+      return response({ error: { code: 'ACTION_PERSISTENCE_FAILED' } }, 500);
+    }
+    await admin.from('chat_messages').insert({
+      user_id: userId,
+      chat_session_id: sessionId,
+      role: 'assistant',
+      content: completedPurchase,
+      model_name: 'deterministic-purchase-parser',
+    });
+    await admin.from('ai_actions').update({
+      intent: completedPurchase.intent,
+      result_json: completedPurchase,
+      status: 'processed',
+      processed_at: new Date().toISOString(),
+    }).eq('id', action.id);
+    await admin.from('chat_sessions').update({ last_message_at: new Date().toISOString() }).eq('id', sessionId);
+    return response({ sessionId, action: completedPurchase, replayed: false, source: 'deterministic' });
+  }
 
   const instruction = `Você é o assistente financeiro do Finance AI para usuários brasileiros.
 Responda exclusivamente com um objeto JSON válido, sem markdown ou texto fora do JSON.
