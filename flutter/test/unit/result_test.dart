@@ -41,4 +41,14 @@ void main() {
       'Cartão',
     );
   });
+
+  test(
+    'Command suggestions appear after typing at sign and filter by prefix',
+    () {
+      expect(filterFinanceCommandSuggestions('@'), financeCommandTags);
+      expect(filterFinanceCommandSuggestions('@cr'), ['@cripto']);
+      expect(filterFinanceCommandSuggestions('@cripto '), isEmpty);
+      expect(filterFinanceCommandSuggestions('comprei'), isEmpty);
+    },
+  );
 }

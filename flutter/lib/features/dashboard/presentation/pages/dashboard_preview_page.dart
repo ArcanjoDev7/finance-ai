@@ -90,6 +90,7 @@ class _DashboardPreviewPageState extends State<DashboardPreviewPage> {
   final List<InvestmentItem> _investments = [];
   final List<CryptoItem> _cryptos = [];
   final ChatSessionState _chatSession = ChatSessionState();
+  bool _tourOpen = false;
 
   @override
   void initState() {
@@ -102,6 +103,34 @@ class _DashboardPreviewPageState extends State<DashboardPreviewPage> {
     if (!mounted) return;
     _accountToken = token;
     await Future.wait([_restoreDashboard(token), _restoreProfile(token)]);
+    await _maybeShowAppTour();
+  }
+
+  Future<void> _maybeShowAppTour() async {
+    final token = _accountToken;
+    if (token == null || _tourOpen || !mounted) return;
+    if (await SupabaseWebClient.instance.hasCompletedAppTour(token)) return;
+    await _showAppTour();
+  }
+
+  Future<void> _showAppTour() async {
+    if (_tourOpen || !mounted) return;
+    _tourOpen = true;
+    await Future<void>.delayed(Duration.zero);
+    if (!mounted) {
+      _tourOpen = false;
+      return;
+    }
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const _AppTourDialog(),
+    );
+    final token = _accountToken;
+    if (token != null) {
+      await SupabaseWebClient.instance.markAppTourCompleted(token);
+    }
+    _tourOpen = false;
   }
 
   String get _profileInitials {
@@ -659,6 +688,7 @@ class _DashboardPreviewPageState extends State<DashboardPreviewPage> {
         onSignOut: _confirmSignOut,
         onOpenAssistant: () => _go(FinancePage.assistant),
         onEditProfile: _editProfile,
+        onOpenTour: _showAppTour,
       ),
     };
     return Scaffold(
@@ -2057,6 +2087,7 @@ class _SettingsPage extends StatelessWidget {
     required this.onSignOut,
     required this.onOpenAssistant,
     required this.onEditProfile,
+    required this.onOpenTour,
   });
   final bool hideValues;
   final bool sidebarCollapsed;
@@ -2068,6 +2099,7 @@ class _SettingsPage extends StatelessWidget {
   final Future<void> Function() onSignOut;
   final VoidCallback onOpenAssistant;
   final Future<void> Function() onEditProfile;
+  final Future<void> Function() onOpenTour;
 
   @override
   Widget build(BuildContext context) => ListView(
@@ -2153,6 +2185,23 @@ class _SettingsPage extends StatelessWidget {
       ),
       const SizedBox(height: 18),
       _Panel(
+        title: 'Ajuda',
+        child: ListTile(
+          contentPadding: EdgeInsets.zero,
+          leading: const CircleAvatar(child: Icon(Icons.explore_outlined)),
+          title: const Text('Conheça o Finance AI'),
+          subtitle: const Text(
+            'Veja novamente o tour com os principais recursos do aplicativo.',
+          ),
+          trailing: OutlinedButton.icon(
+            onPressed: onOpenTour,
+            icon: const Icon(Icons.play_arrow_rounded),
+            label: const Text('Ver tour'),
+          ),
+        ),
+      ),
+      const SizedBox(height: 18),
+      _Panel(
         title: 'Dados da conta',
         child: ListTile(
           contentPadding: EdgeInsets.zero,
@@ -2171,6 +2220,235 @@ class _SettingsPage extends StatelessWidget {
         ),
       ),
     ],
+  );
+}
+
+class _TourStep {
+  const _TourStep({
+    required this.icon,
+    required this.title,
+    required this.description,
+    required this.tip,
+    required this.color,
+  });
+
+  final IconData icon;
+  final String title;
+  final String description;
+  final String tip;
+  final Color color;
+}
+
+class _AppTourDialog extends StatefulWidget {
+  const _AppTourDialog();
+
+  @override
+  State<_AppTourDialog> createState() => _AppTourDialogState();
+}
+
+class _AppTourDialogState extends State<_AppTourDialog> {
+  static const _steps = <_TourStep>[
+    _TourStep(
+      icon: Icons.space_dashboard_rounded,
+      title: 'Sua vida financeira em um olhar',
+      description:
+          'O Início reúne saldo, gastos do mês, investimentos e movimentações recentes.',
+      tip: 'Toque no olho do topo para ocultar valores quando precisar.',
+      color: AppColors.brand,
+    ),
+    _TourStep(
+      icon: Icons.add_circle_outline_rounded,
+      title: 'Registre cada movimentação',
+      description:
+          'Adicione despesas, receitas, investimentos, cartões e criptomoedas pelos formulários do app.',
+      tip:
+          'No celular, o botão + acompanha as telas em que você pode adicionar dados.',
+      color: AppColors.positive,
+    ),
+    _TourStep(
+      icon: Icons.alternate_email_rounded,
+      title: 'Use comandos rápidos na IA',
+      description:
+          'Abra a IA e digite @. As sugestões aparecem logo acima do campo para salvar direto no lugar certo.',
+      tip: '@despesa mercado 50  •  @cripto Bitcoin 100',
+      color: AppColors.crypto,
+    ),
+    _TourStep(
+      icon: Icons.navigation_rounded,
+      title: 'Navegue sem se perder',
+      description:
+          'A barra inferior leva ao Início, Movimentos, IA e Investimentos. Em Mais ficam os outros recursos.',
+      tip:
+          'Relatórios, metas, cartões, criptomoedas e perfil ficam no menu Mais.',
+      color: Color(0xFF60A5FA),
+    ),
+    _TourStep(
+      icon: Icons.verified_user_outlined,
+      title: 'Sua conta, seus dados',
+      description:
+          'Cada conta mantém seus próprios dados. No Perfil você edita o nome, controla a privacidade e pode sair.',
+      tip: 'Você pode repetir este tour em Mais › Perfil e ajustes › Ver tour.',
+      color: Color(0xFFC4B5FD),
+    ),
+  ];
+
+  final _controller = PageController();
+  int _index = 0;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _next() {
+    if (_index == _steps.length - 1) {
+      Navigator.pop(context);
+      return;
+    }
+    _controller.nextPage(
+      duration: const Duration(milliseconds: 280),
+      curve: Curves.easeOutCubic,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final size = MediaQuery.sizeOf(context);
+    final dialogHeight = (size.height - 40).clamp(430.0, 640.0);
+    return PopScope(
+      canPop: false,
+      child: Dialog(
+        insetPadding: const EdgeInsets.all(16),
+        clipBehavior: Clip.antiAlias,
+        child: SizedBox(
+          width: 520,
+          height: dialogHeight,
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 14, 12, 0),
+                child: Row(
+                  children: [
+                    Text(
+                      '${_index + 1} de ${_steps.length}',
+                      style: Theme.of(
+                        context,
+                      ).textTheme.labelLarge?.copyWith(color: Colors.white60),
+                    ),
+                    const Spacer(),
+                    TextButton(
+                      onPressed: () => Navigator.pop(context),
+                      child: const Text('Pular tour'),
+                    ),
+                  ],
+                ),
+              ),
+              Expanded(
+                child: PageView.builder(
+                  controller: _controller,
+                  itemCount: _steps.length,
+                  onPageChanged: (value) => setState(() => _index = value),
+                  itemBuilder: (context, index) =>
+                      _TourStepView(step: _steps[index]),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+                child: Row(
+                  children: [
+                    for (var index = 0; index < _steps.length; index++)
+                      AnimatedContainer(
+                        duration: const Duration(milliseconds: 180),
+                        width: index == _index ? 24 : 8,
+                        height: 8,
+                        margin: const EdgeInsets.only(right: 6),
+                        decoration: BoxDecoration(
+                          color: index == _index
+                              ? _steps[_index].color
+                              : Colors.white24,
+                          borderRadius: BorderRadius.circular(99),
+                        ),
+                      ),
+                    const Spacer(),
+                    FilledButton.icon(
+                      onPressed: _next,
+                      icon: Icon(
+                        _index == _steps.length - 1
+                            ? Icons.check_rounded
+                            : Icons.arrow_forward_rounded,
+                      ),
+                      label: Text(
+                        _index == _steps.length - 1 ? 'Começar' : 'Próximo',
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _TourStepView extends StatelessWidget {
+  const _TourStepView({required this.step});
+
+  final _TourStep step;
+
+  @override
+  Widget build(BuildContext context) => SingleChildScrollView(
+    padding: const EdgeInsets.fromLTRB(26, 16, 26, 12),
+    child: Column(
+      children: [
+        Container(
+          width: 112,
+          height: 112,
+          decoration: BoxDecoration(
+            color: step.color.withValues(alpha: 0.14),
+            shape: BoxShape.circle,
+            border: Border.all(color: step.color.withValues(alpha: 0.38)),
+          ),
+          child: Icon(step.icon, size: 54, color: step.color),
+        ),
+        const SizedBox(height: 28),
+        Text(
+          step.title,
+          textAlign: TextAlign.center,
+          style: Theme.of(
+            context,
+          ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800),
+        ),
+        const SizedBox(height: 14),
+        Text(
+          step.description,
+          textAlign: TextAlign.center,
+          style: Theme.of(
+            context,
+          ).textTheme.bodyLarge?.copyWith(color: Colors.white70, height: 1.45),
+        ),
+        const SizedBox(height: 24),
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: step.color.withValues(alpha: 0.1),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: step.color.withValues(alpha: 0.24)),
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(Icons.lightbulb_outline_rounded, color: step.color),
+              const SizedBox(width: 12),
+              Expanded(child: Text(step.tip)),
+            ],
+          ),
+        ),
+      ],
+    ),
   );
 }
 

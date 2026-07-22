@@ -1,3 +1,4 @@
+import 'package:finance_ai/app/theme/app_theme.dart';
 import 'package:finance_ai/core/services/supabase_web_client.dart';
 import 'package:finance_ai/features/dashboard/presentation/pages/dashboard_preview_page.dart';
 import 'package:flutter/material.dart';
@@ -30,6 +31,24 @@ class ChatMessage {
   final String text;
   final bool user;
   final Map<String, dynamic>? action;
+}
+
+const financeCommandTags = <String>[
+  '@despesa',
+  '@receita',
+  '@investimento',
+  '@cripto',
+  '@cartao',
+];
+
+List<String> filterFinanceCommandSuggestions(String input) {
+  final query = input.trimLeft().toLowerCase();
+  if (!query.startsWith('@') || query.contains(RegExp(r'\s'))) {
+    return const [];
+  }
+  return financeCommandTags
+      .where((command) => command.startsWith(query))
+      .toList(growable: false);
 }
 
 Map<String, dynamic>? parseTaggedFinanceCommand(
@@ -96,6 +115,7 @@ Map<String, dynamic>? parseTaggedFinanceCommand(
 
 class _ChatPageState extends State<ChatPage> {
   final _input = TextEditingController();
+  final _inputFocus = FocusNode();
   final _messagesController = ScrollController();
   String? _token;
   bool _sending = false;
@@ -105,6 +125,7 @@ class _ChatPageState extends State<ChatPage> {
   @override
   void initState() {
     super.initState();
+    _input.addListener(_onInputChanged);
     SupabaseWebClient.instance.restoredSession().then((value) {
       if (mounted && value != null) setState(() => _token = value);
     });
@@ -113,9 +134,32 @@ class _ChatPageState extends State<ChatPage> {
 
   @override
   void dispose() {
+    _input.removeListener(_onInputChanged);
     _input.dispose();
+    _inputFocus.dispose();
     _messagesController.dispose();
     super.dispose();
+  }
+
+  void _onInputChanged() {
+    if (mounted) setState(() {});
+  }
+
+  void _selectCommand(String command) {
+    final value = '$command ';
+    _input.value = TextEditingValue(
+      text: value,
+      selection: TextSelection.collapsed(offset: value.length),
+    );
+    _inputFocus.requestFocus();
+  }
+
+  void _startCommand() {
+    _input.value = const TextEditingValue(
+      text: '@',
+      selection: TextSelection.collapsed(offset: 1),
+    );
+    _inputFocus.requestFocus();
   }
 
   void _scrollToLatestMessage() {
@@ -575,6 +619,7 @@ class _ChatPageState extends State<ChatPage> {
   @override
   Widget build(BuildContext context) {
     final compact = MediaQuery.sizeOf(context).width < 600;
+    final commandSuggestions = filterFinanceCommandSuggestions(_input.text);
     return Column(
       children: [
         Padding(
@@ -620,7 +665,7 @@ class _ChatPageState extends State<ChatPage> {
         ),
         Expanded(
           child: _messages.isEmpty
-              ? _Empty(onSend: _send)
+              ? _Empty(onStartCommand: _startCommand)
               : ListView(
                   controller: _messagesController,
                   padding: EdgeInsets.symmetric(horizontal: compact ? 16 : 28),
@@ -633,35 +678,48 @@ class _ChatPageState extends State<ChatPage> {
         Padding(
           padding: EdgeInsets.fromLTRB(
             compact ? 12 : 24,
-            10,
+            8,
             compact ? 12 : 24,
             compact ? 12 : 24,
           ),
-          child: Row(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Expanded(
-                child: TextField(
-                  controller: _input,
-                  onSubmitted: (_) => _send(),
-                  decoration: const InputDecoration(
-                    prefixIcon: Icon(Icons.alternate_email_rounded),
-                    hintText: 'Ex.: @cripto Bitcoin 100',
+              if (commandSuggestions.isNotEmpty) ...[
+                _CommandSuggestions(
+                  commands: commandSuggestions,
+                  onSelected: _selectCommand,
+                ),
+                const SizedBox(height: 8),
+              ],
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _input,
+                      focusNode: _inputFocus,
+                      onSubmitted: (_) => _send(),
+                      decoration: const InputDecoration(
+                        prefixIcon: Icon(Icons.alternate_email_rounded),
+                        hintText: 'Digite @ para ver os comandos',
+                      ),
+                    ),
                   ),
-                ),
+                  const SizedBox(width: 12),
+                  if (compact)
+                    IconButton.filled(
+                      onPressed: _sending ? null : _send,
+                      tooltip: 'Enviar',
+                      icon: const Icon(Icons.arrow_upward),
+                    )
+                  else
+                    FilledButton.icon(
+                      onPressed: _sending ? null : _send,
+                      icon: const Icon(Icons.arrow_upward),
+                      label: const Text('Enviar'),
+                    ),
+                ],
               ),
-              const SizedBox(width: 12),
-              if (compact)
-                IconButton.filled(
-                  onPressed: _sending ? null : _send,
-                  tooltip: 'Enviar',
-                  icon: const Icon(Icons.arrow_upward),
-                )
-              else
-                FilledButton.icon(
-                  onPressed: _sending ? null : _send,
-                  icon: const Icon(Icons.arrow_upward),
-                  label: const Text('Enviar'),
-                ),
             ],
           ),
         ),
@@ -670,55 +728,208 @@ class _ChatPageState extends State<ChatPage> {
   }
 }
 
-class _Empty extends StatelessWidget {
-  const _Empty({required this.onSend});
-  final Future<void> Function([String?]) onSend;
+class _CommandSuggestions extends StatelessWidget {
+  const _CommandSuggestions({required this.commands, required this.onSelected});
+
+  final List<String> commands;
+  final ValueChanged<String> onSelected;
+
+  (IconData, String, Color) _details(String command) => switch (command) {
+    '@despesa' => (Icons.arrow_upward_rounded, 'Despesa', AppColors.negative),
+    '@receita' => (Icons.arrow_downward_rounded, 'Receita', AppColors.positive),
+    '@investimento' => (Icons.show_chart_rounded, 'Investir', AppColors.brand),
+    '@cripto' => (Icons.currency_bitcoin_rounded, 'Cripto', AppColors.crypto),
+    '@cartao' => (Icons.credit_card_rounded, 'Cartão', Color(0xFF60A5FA)),
+    _ => (Icons.alternate_email_rounded, command, Colors.white70),
+  };
+
   @override
-  Widget build(BuildContext context) {
-    const items = [
-      '@despesa mercado 50',
-      '@receita salário 4000',
-      '@investimento CDB 5000',
-      '@cripto Bitcoin 1500',
-    ];
-    return Center(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.auto_awesome, size: 54, color: Color(0xFFC4B5FD)),
-            const SizedBox(height: 12),
-            Text(
-              'Como posso ajudar com suas finanças?',
-              textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.headlineSmall,
+  Widget build(BuildContext context) => DecoratedBox(
+    decoration: BoxDecoration(
+      color: const Color(0xFF191526),
+      borderRadius: BorderRadius.circular(16),
+      border: Border.all(color: Colors.white12),
+      boxShadow: const [
+        BoxShadow(color: Colors.black26, blurRadius: 18, offset: Offset(0, -4)),
+      ],
+    ),
+    child: SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      padding: const EdgeInsets.all(8),
+      child: Row(
+        children: commands.map((command) {
+          final details = _details(command);
+          return Padding(
+            padding: const EdgeInsets.only(right: 7),
+            child: ActionChip(
+              avatar: Icon(details.$1, size: 18, color: details.$3),
+              label: Text(details.$2),
+              tooltip: command,
+              onPressed: () => onSelected(command),
             ),
-            const SizedBox(height: 18),
-            const Text(
-              'Use @ para salvar direto na categoria certa:',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: Colors.white70),
-            ),
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 10,
-              runSpacing: 10,
-              alignment: WrapAlignment.center,
-              children: items
-                  .map(
-                    (item) => ActionChip(
-                      onPressed: () => onSend(item),
-                      label: Text(item),
-                    ),
-                  )
-                  .toList(),
-            ),
-          ],
-        ),
+          );
+        }).toList(),
       ),
-    );
-  }
+    ),
+  );
+}
+
+class _Empty extends StatelessWidget {
+  const _Empty({required this.onStartCommand});
+  final VoidCallback onStartCommand;
+
+  @override
+  Widget build(BuildContext context) => Center(
+    child: SingleChildScrollView(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 76,
+            height: 76,
+            decoration: const BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: LinearGradient(
+                colors: [Color(0xFF7C3AED), Color(0xFF4F46E5)],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: Color(0x557C3AED),
+                  blurRadius: 28,
+                  spreadRadius: 2,
+                ),
+              ],
+            ),
+            child: const Icon(Icons.auto_awesome, size: 36),
+          ),
+          const SizedBox(height: 20),
+          Text(
+            'Como posso ajudar?',
+            textAlign: TextAlign.center,
+            style: Theme.of(
+              context,
+            ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800),
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            'Converse normalmente ou use um comando rápido.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: Colors.white60),
+          ),
+          const SizedBox(height: 24),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 460),
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(18),
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  colors: [Color(0xFF2A1C43), Color(0xFF191526)],
+                ),
+                borderRadius: BorderRadius.circular(22),
+                border: Border.all(color: const Color(0x557C3AED)),
+              ),
+              child: Column(
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        width: 48,
+                        height: 48,
+                        decoration: BoxDecoration(
+                          color: AppColors.brand.withValues(alpha: 0.18),
+                          borderRadius: BorderRadius.circular(15),
+                        ),
+                        child: const Icon(
+                          Icons.alternate_email_rounded,
+                          color: Color(0xFFC4B5FD),
+                        ),
+                      ),
+                      const SizedBox(width: 14),
+                      const Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Comandos rápidos',
+                              style: TextStyle(fontWeight: FontWeight.w800),
+                            ),
+                            SizedBox(height: 3),
+                            Text(
+                              'Digite @ e escolha onde salvar',
+                              style: TextStyle(color: Colors.white60),
+                            ),
+                          ],
+                        ),
+                      ),
+                      IconButton.filled(
+                        onPressed: onStartCommand,
+                        tooltip: 'Ver comandos',
+                        icon: const Icon(Icons.arrow_forward_rounded),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  const Wrap(
+                    alignment: WrapAlignment.center,
+                    spacing: 14,
+                    runSpacing: 10,
+                    children: [
+                      _CommandLegend(
+                        icon: Icons.arrow_upward_rounded,
+                        label: 'Despesa',
+                        color: AppColors.negative,
+                      ),
+                      _CommandLegend(
+                        icon: Icons.arrow_downward_rounded,
+                        label: 'Receita',
+                        color: AppColors.positive,
+                      ),
+                      _CommandLegend(
+                        icon: Icons.show_chart_rounded,
+                        label: 'Investir',
+                        color: AppColors.brand,
+                      ),
+                      _CommandLegend(
+                        icon: Icons.currency_bitcoin_rounded,
+                        label: 'Cripto',
+                        color: AppColors.crypto,
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+class _CommandLegend extends StatelessWidget {
+  const _CommandLegend({
+    required this.icon,
+    required this.label,
+    required this.color,
+  });
+
+  final IconData icon;
+  final String label;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) => Row(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      Icon(icon, size: 16, color: color),
+      const SizedBox(width: 5),
+      Text(label, style: const TextStyle(fontSize: 12, color: Colors.white70)),
+    ],
+  );
 }
 
 class _Bubble extends StatelessWidget {

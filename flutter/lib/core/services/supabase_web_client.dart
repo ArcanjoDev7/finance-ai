@@ -37,6 +37,7 @@ class SupabaseWebClient {
   static const _refreshTokenKey = 'finance_ai_refresh_token';
   static const _profileNameKey = 'finance_ai_profile_name';
   static const _dashboardDraftKey = 'finance_ai_dashboard_draft';
+  static const _appTourKey = 'finance_ai_app_tour_v1';
   final Dio _dio = Dio();
   final FlutterSecureStorage _storage = const FlutterSecureStorage();
 
@@ -230,6 +231,12 @@ class SupabaseWebClient {
 
   Future<String?> loadCachedProfileName(String token) =>
       _storage.read(key: _scopedKey(_profileNameKey, token));
+
+  Future<bool> hasCompletedAppTour(String token) async =>
+      await _storage.read(key: _scopedKey(_appTourKey, token)) == 'completed';
+
+  Future<void> markAppTourCompleted(String token) =>
+      _storage.write(key: _scopedKey(_appTourKey, token), value: 'completed');
 
   Future<String?> loadProfileName(String token) async {
     final config = _config;
