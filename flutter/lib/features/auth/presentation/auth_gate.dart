@@ -5,6 +5,7 @@ import 'package:finance_ai/app/environment/app_environment.dart';
 import 'package:finance_ai/core/services/supabase_web_client.dart';
 import 'package:finance_ai/features/dashboard/presentation/pages/dashboard_preview_page.dart';
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 
 class AuthGate extends StatefulWidget {
   const AuthGate({super.key});
@@ -15,6 +16,7 @@ class AuthGate extends StatefulWidget {
 
 class _AuthGateState extends State<AuthGate> {
   String? _token;
+  String? _recoveryToken;
   var _checking = true;
   Timer? _sessionSyncTimer;
   var _syncingSession = false;
@@ -36,6 +38,18 @@ class _AuthGateState extends State<AuthGate> {
   }
 
   Future<void> _restoreSession() async {
+    final recoveryToken = SupabaseWebClient.instance
+        .recoveryAccessTokenFromCurrentUrl();
+    if (recoveryToken != null) {
+      await SupabaseWebClient.instance.clearStoredSession();
+      if (!mounted) return;
+      setState(() {
+        _recoveryToken = recoveryToken;
+        _token = null;
+        _checking = false;
+      });
+      return;
+    }
     final token = await SupabaseWebClient.instance.restoredSession();
     if (!mounted) return;
     setState(() {
@@ -47,6 +61,11 @@ class _AuthGateState extends State<AuthGate> {
   Future<void> _signOut() async {
     await SupabaseWebClient.instance.signOut();
     if (mounted) setState(() => _token = null);
+  }
+
+  void _finishRecovery() {
+    setState(() => _recoveryToken = null);
+    context.go('/');
   }
 
   Future<void> _syncSessionAcrossTabs() async {
@@ -69,6 +88,12 @@ class _AuthGateState extends State<AuthGate> {
     }
     if (!AppEnvironmentConfig.fromBuild().hasSupabaseConfiguration) {
       return const _ConfigurationRequiredPage();
+    }
+    if (_recoveryToken != null) {
+      return _ResetPasswordPage(
+        accessToken: _recoveryToken!,
+        onFinished: _finishRecovery,
+      );
     }
     if (_token != null) {
       return DashboardPreviewPage(
@@ -175,6 +200,37 @@ class _AuthPageState extends State<_AuthPage> {
       _message(
         'Não foi possível concluir a solicitação. Tente novamente em alguns minutos.',
       );
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _requestPasswordReset() async {
+    final email = _email.text.trim();
+    if (!_isValidEmail(email)) {
+      _message('Digite seu e-mail acima para receber o link de recuperação.');
+      return;
+    }
+    setState(() => _loading = true);
+    try {
+      final redirectTo = Uri.base.replace(fragment: '', query: '').toString();
+      await SupabaseWebClient.instance.requestPasswordReset(
+        email,
+        redirectTo: redirectTo,
+      );
+      _message(
+        'Se esse e-mail estiver cadastrado, você receberá um link para criar uma nova senha.',
+      );
+    } on DioException catch (error) {
+      if (error.response?.statusCode == 429) {
+        _message(
+          'Muitas solicitações. Aguarde alguns minutos e tente novamente.',
+        );
+      } else {
+        _message('Não foi possível enviar o link agora. Tente novamente.');
+      }
+    } catch (_) {
+      _message('Não foi possível enviar o link agora. Tente novamente.');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -319,6 +375,14 @@ class _AuthPageState extends State<_AuthPage> {
                         onSubmitted: (_) => _submit(),
                         decoration: const InputDecoration(labelText: 'Senha'),
                       ),
+                      if (!_createAccount)
+                        Align(
+                          alignment: Alignment.centerRight,
+                          child: TextButton(
+                            onPressed: _loading ? null : _requestPasswordReset,
+                            child: const Text('Esqueci minha senha'),
+                          ),
+                        ),
                       const SizedBox(height: 20),
                       FilledButton(
                         onPressed: _loading || blocked ? null : _submit,
@@ -334,6 +398,200 @@ class _AuthPageState extends State<_AuthPage> {
                       ),
                     ],
                   ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ResetPasswordPage extends StatefulWidget {
+  const _ResetPasswordPage({
+    required this.accessToken,
+    required this.onFinished,
+  });
+
+  final String accessToken;
+  final VoidCallback onFinished;
+
+  @override
+  State<_ResetPasswordPage> createState() => _ResetPasswordPageState();
+}
+
+class _ResetPasswordPageState extends State<_ResetPasswordPage> {
+  final _password = TextEditingController();
+  final _confirmation = TextEditingController();
+  var _loading = false;
+  var _completed = false;
+  var _obscurePassword = true;
+  var _obscureConfirmation = true;
+
+  @override
+  void dispose() {
+    _password.dispose();
+    _confirmation.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    if (_password.text.length < 6) {
+      _message('A nova senha precisa ter pelo menos 6 caracteres.');
+      return;
+    }
+    if (_password.text != _confirmation.text) {
+      _message('As senhas digitadas não são iguais.');
+      return;
+    }
+    setState(() => _loading = true);
+    try {
+      await SupabaseWebClient.instance.updatePassword(
+        widget.accessToken,
+        _password.text,
+      );
+      await SupabaseWebClient.instance.clearStoredSession();
+      if (mounted) setState(() => _completed = true);
+    } on DioException catch (error) {
+      final status = error.response?.statusCode;
+      _message(
+        status == 401 || status == 403
+            ? 'Este link expirou. Solicite um novo link na tela de login.'
+            : 'Não foi possível alterar a senha. Solicite um novo link e tente novamente.',
+      );
+    } catch (_) {
+      _message('Não foi possível alterar a senha agora. Tente novamente.');
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  void _message(String value) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(value)));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final compact = MediaQuery.sizeOf(context).width < 600;
+    return Scaffold(
+      body: DecoratedBox(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            colors: [Color(0xFF10072B), Color(0xFF061A3A)],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+        ),
+        child: Center(
+          child: SingleChildScrollView(
+            padding: EdgeInsets.all(compact ? 16 : 24),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 440),
+              child: Card(
+                color: const Color(0xEE211C29),
+                child: Padding(
+                  padding: EdgeInsets.all(compact ? 20 : 30),
+                  child: _completed
+                      ? Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            const Icon(
+                              Icons.check_circle_rounded,
+                              size: 54,
+                              color: Color(0xFF3DD6A0),
+                            ),
+                            const SizedBox(height: 18),
+                            Text(
+                              'Senha atualizada',
+                              textAlign: TextAlign.center,
+                              style: Theme.of(context).textTheme.headlineSmall
+                                  ?.copyWith(fontWeight: FontWeight.w800),
+                            ),
+                            const SizedBox(height: 10),
+                            const Text(
+                              'Agora você já pode entrar usando sua nova senha.',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(color: Colors.white70),
+                            ),
+                            const SizedBox(height: 24),
+                            FilledButton(
+                              onPressed: widget.onFinished,
+                              child: const Text('Voltar para o login'),
+                            ),
+                          ],
+                        )
+                      : Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            const Icon(
+                              Icons.lock_reset_rounded,
+                              size: 50,
+                              color: Color(0xFFC4B5FD),
+                            ),
+                            const SizedBox(height: 16),
+                            Text(
+                              'Crie uma nova senha',
+                              textAlign: TextAlign.center,
+                              style: Theme.of(context).textTheme.headlineSmall
+                                  ?.copyWith(fontWeight: FontWeight.w800),
+                            ),
+                            const SizedBox(height: 8),
+                            const Text(
+                              'Escolha uma senha com pelo menos 6 caracteres.',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(color: Colors.white70),
+                            ),
+                            const SizedBox(height: 26),
+                            TextField(
+                              controller: _password,
+                              obscureText: _obscurePassword,
+                              textInputAction: TextInputAction.next,
+                              decoration: InputDecoration(
+                                labelText: 'Nova senha',
+                                suffixIcon: IconButton(
+                                  onPressed: () => setState(
+                                    () => _obscurePassword = !_obscurePassword,
+                                  ),
+                                  icon: Icon(
+                                    _obscurePassword
+                                        ? Icons.visibility_outlined
+                                        : Icons.visibility_off_outlined,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 12),
+                            TextField(
+                              controller: _confirmation,
+                              obscureText: _obscureConfirmation,
+                              onSubmitted: (_) => _submit(),
+                              decoration: InputDecoration(
+                                labelText: 'Confirmar nova senha',
+                                suffixIcon: IconButton(
+                                  onPressed: () => setState(
+                                    () => _obscureConfirmation =
+                                        !_obscureConfirmation,
+                                  ),
+                                  icon: Icon(
+                                    _obscureConfirmation
+                                        ? Icons.visibility_outlined
+                                        : Icons.visibility_off_outlined,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 20),
+                            FilledButton(
+                              onPressed: _loading ? null : _submit,
+                              child: Text(
+                                _loading ? 'Salvando...' : 'Salvar nova senha',
+                              ),
+                            ),
+                          ],
+                        ),
                 ),
               ),
             ),

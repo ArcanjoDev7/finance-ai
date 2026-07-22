@@ -605,6 +605,7 @@ class _DashboardPreviewPageState extends State<DashboardPreviewPage> {
       FinancePage.dashboard => _DashboardContent(
         entries: _entries,
         investments: _investments,
+        profileName: _profileName,
         hideValues: _hideValues,
         onNavigate: _go,
         onAddEntry: _showEntryForm,
@@ -737,13 +738,16 @@ class _DashboardPreviewPageState extends State<DashboardPreviewPage> {
               child: const Icon(Icons.auto_awesome),
             ),
           if (mobile &&
+              _page != FinancePage.dashboard &&
               _page != FinancePage.assistant &&
               _page != FinancePage.settings)
-            FloatingActionButton.extended(
+            FloatingActionButton(
               heroTag: 'entry-fab',
               onPressed: _showEntryForm,
-              icon: const Icon(Icons.add),
-              label: const Text('Adicionar'),
+              tooltip: 'Adicionar lançamento',
+              shape: const CircleBorder(),
+              elevation: 6,
+              child: const Icon(Icons.add_rounded, size: 30),
             ),
         ],
       ),
@@ -1043,6 +1047,7 @@ class _DashboardContent extends StatelessWidget {
   const _DashboardContent({
     required this.entries,
     required this.investments,
+    required this.profileName,
     required this.hideValues,
     required this.onNavigate,
     required this.onAddEntry,
@@ -1050,6 +1055,7 @@ class _DashboardContent extends StatelessWidget {
   });
   final List<FinanceEntry> entries;
   final List<InvestmentItem> investments;
+  final String profileName;
   final bool hideValues;
   final ValueChanged<FinancePage> onNavigate;
   final Future<void> Function({EntryKind kind}) onAddEntry;
@@ -1066,6 +1072,17 @@ class _DashboardContent extends StatelessWidget {
       0.0,
       (sum, item) => sum + item.amount,
     );
+    if (MediaQuery.sizeOf(context).width < AppBreakpoints.medium) {
+      return _MobileDashboard(
+        entries: entries,
+        income: income,
+        expense: expense,
+        profileName: profileName,
+        hideValues: hideValues,
+        onNavigate: onNavigate,
+        onAddEntry: onAddEntry,
+      );
+    }
     return ListView(
       padding: _pagePadding(context),
       children: [
@@ -1213,6 +1230,341 @@ class _DashboardContent extends StatelessWidget {
       ],
     );
   }
+}
+
+class _MobileDashboard extends StatelessWidget {
+  const _MobileDashboard({
+    required this.entries,
+    required this.income,
+    required this.expense,
+    required this.profileName,
+    required this.hideValues,
+    required this.onNavigate,
+    required this.onAddEntry,
+  });
+
+  final List<FinanceEntry> entries;
+  final double income;
+  final double expense;
+  final String profileName;
+  final bool hideValues;
+  final ValueChanged<FinancePage> onNavigate;
+  final Future<void> Function({EntryKind kind}) onAddEntry;
+
+  @override
+  Widget build(BuildContext context) {
+    final firstName = profileName.trim().split(RegExp(r'\s+')).first;
+    final recentEntries = entries.take(4).toList();
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 28),
+      children: [
+        Text(
+          'Bem-vindo de volta',
+          style: Theme.of(
+            context,
+          ).textTheme.bodyMedium?.copyWith(color: AppColors.textMuted),
+        ),
+        const SizedBox(height: 3),
+        Text(
+          firstName == 'Minha' ? 'Seu resumo financeiro' : firstName,
+          style: Theme.of(
+            context,
+          ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800),
+        ),
+        const SizedBox(height: 18),
+        _MobileBalanceCard(
+          balance: income - expense,
+          income: income,
+          expense: expense,
+          hideValues: hideValues,
+        ),
+        const SizedBox(height: 22),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceAround,
+          children: [
+            _MobileQuickAction(
+              icon: Icons.north_east_rounded,
+              label: 'Despesa',
+              color: AppColors.negative,
+              onTap: () => onAddEntry(kind: EntryKind.expense),
+            ),
+            _MobileQuickAction(
+              icon: Icons.south_west_rounded,
+              label: 'Receita',
+              color: AppColors.positive,
+              onTap: () => onAddEntry(kind: EntryKind.income),
+            ),
+            _MobileQuickAction(
+              icon: Icons.credit_card_outlined,
+              label: 'Cartões',
+              color: AppColors.info,
+              onTap: () => onNavigate(FinancePage.cards),
+            ),
+            _MobileQuickAction(
+              icon: Icons.flag_outlined,
+              label: 'Metas',
+              color: AppColors.warning,
+              onTap: () => onNavigate(FinancePage.goals),
+            ),
+          ],
+        ),
+        const SizedBox(height: 26),
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                'Transações recentes',
+                style: Theme.of(
+                  context,
+                ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
+              ),
+            ),
+            TextButton(
+              onPressed: () => onNavigate(FinancePage.transactions),
+              child: const Text('Ver todas'),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Container(
+          decoration: BoxDecoration(
+            color: AppColors.surfaceElevated.withValues(alpha: 0.9),
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(color: AppColors.border),
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+          child: recentEntries.isEmpty
+              ? const _HelpfulEmpty(
+                  icon: Icons.receipt_long_outlined,
+                  title: 'Nenhuma movimentação ainda',
+                  text:
+                      'Use os atalhos acima para registrar seu primeiro valor.',
+                )
+              : Column(
+                  children: [
+                    for (
+                      var index = 0;
+                      index < recentEntries.length;
+                      index++
+                    ) ...[
+                      _EntryRow(
+                        entry: recentEntries[index],
+                        hideValues: hideValues,
+                      ),
+                      if (index < recentEntries.length - 1)
+                        const Divider(height: 1),
+                    ],
+                  ],
+                ),
+        ),
+      ],
+    );
+  }
+}
+
+class _MobileBalanceCard extends StatelessWidget {
+  const _MobileBalanceCard({
+    required this.balance,
+    required this.income,
+    required this.expense,
+    required this.hideValues,
+  });
+
+  final double balance;
+  final double income;
+  final double expense;
+  final bool hideValues;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    height: 205,
+    clipBehavior: Clip.antiAlias,
+    decoration: BoxDecoration(
+      borderRadius: BorderRadius.circular(28),
+      gradient: const LinearGradient(
+        colors: [Color(0xFF39216F), Color(0xFF172B61)],
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+      ),
+      boxShadow: const [
+        BoxShadow(
+          color: Color(0x559B7BFF),
+          blurRadius: 30,
+          offset: Offset(0, 14),
+        ),
+      ],
+    ),
+    child: Stack(
+      children: [
+        const Positioned(
+          right: -52,
+          top: -62,
+          child: _CardGlow(size: 180, color: Color(0x335DA9FF)),
+        ),
+        const Positioned(
+          left: -58,
+          bottom: -82,
+          child: _CardGlow(size: 190, color: Color(0x339B7BFF)),
+        ),
+        Padding(
+          padding: const EdgeInsets.all(22),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const Icon(
+                    Icons.account_balance_wallet_outlined,
+                    color: Colors.white70,
+                  ),
+                  const Spacer(),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: const Text(
+                      'CONTA PRINCIPAL',
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 1.2,
+                        color: Colors.white70,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const Spacer(),
+              const Text(
+                'Saldo atual',
+                style: TextStyle(color: Colors.white70),
+              ),
+              const SizedBox(height: 5),
+              _FinancialValue(
+                value: balance,
+                hidden: hideValues,
+                style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const Spacer(),
+              Row(
+                children: [
+                  Expanded(
+                    child: _BalanceDetail(
+                      label: 'Entradas',
+                      value: income,
+                      hideValues: hideValues,
+                    ),
+                  ),
+                  Expanded(
+                    child: _BalanceDetail(
+                      label: 'Saídas',
+                      value: expense,
+                      hideValues: hideValues,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+class _CardGlow extends StatelessWidget {
+  const _CardGlow({required this.size, required this.color});
+  final double size;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    width: size,
+    height: size,
+    decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+  );
+}
+
+class _BalanceDetail extends StatelessWidget {
+  const _BalanceDetail({
+    required this.label,
+    required this.value,
+    required this.hideValues,
+  });
+  final String label;
+  final double value;
+  final bool hideValues;
+
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Text(label, style: const TextStyle(color: Colors.white60, fontSize: 11)),
+      const SizedBox(height: 2),
+      _FinancialValue(
+        value: value,
+        hidden: hideValues,
+        style: const TextStyle(
+          color: Colors.white,
+          fontWeight: FontWeight.w700,
+          fontSize: 13,
+        ),
+      ),
+    ],
+  );
+}
+
+class _MobileQuickAction extends StatelessWidget {
+  const _MobileQuickAction({
+    required this.icon,
+    required this.label,
+    required this.color,
+    required this.onTap,
+  });
+  final IconData icon;
+  final String label;
+  final Color color;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+    width: 76,
+    child: Column(
+      children: [
+        Material(
+          color: color.withValues(alpha: 0.14),
+          shape: const CircleBorder(),
+          child: InkWell(
+            onTap: onTap,
+            customBorder: const CircleBorder(),
+            child: SizedBox(
+              width: 56,
+              height: 56,
+              child: Icon(icon, color: color, size: 25),
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          label,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: Theme.of(context).textTheme.labelSmall?.copyWith(
+            color: AppColors.textSecondary,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ],
+    ),
+  );
 }
 
 class _TransactionsPage extends StatefulWidget {

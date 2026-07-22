@@ -77,6 +77,48 @@ class SupabaseWebClient {
     return _persistAuthSession(response.data);
   }
 
+  Future<void> requestPasswordReset(
+    String email, {
+    required String redirectTo,
+  }) async {
+    final config = _config;
+    await _dio.post<void>(
+      '${config.supabaseUrl}/auth/v1/recover',
+      queryParameters: {'redirect_to': redirectTo},
+      data: {'email': email},
+      options: Options(headers: {'apikey': config.supabasePublishableKey}),
+    );
+  }
+
+  String? recoveryAccessTokenFromCurrentUrl() {
+    try {
+      final uri = Uri.base;
+      final values = <String, String>{...uri.queryParameters};
+      if (uri.fragment.isNotEmpty) {
+        values.addAll(Uri.splitQueryString(uri.fragment));
+      }
+      if (values['type'] != 'recovery') return null;
+      final token = values['access_token'];
+      return token == null || token.isEmpty ? null : token;
+    } on FormatException {
+      return null;
+    }
+  }
+
+  Future<void> updatePassword(String accessToken, String password) async {
+    final config = _config;
+    await _dio.put<void>(
+      '${config.supabaseUrl}/auth/v1/user',
+      data: {'password': password},
+      options: Options(
+        headers: {
+          'apikey': config.supabasePublishableKey,
+          'Authorization': 'Bearer $accessToken',
+        },
+      ),
+    );
+  }
+
   Future<void> clearStoredSession() async {
     await _storage.delete(key: _sessionKey);
     await _storage.delete(key: _refreshTokenKey);
