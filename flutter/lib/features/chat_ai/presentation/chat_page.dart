@@ -51,6 +51,78 @@ List<String> filterFinanceCommandSuggestions(String input) {
       .toList(growable: false);
 }
 
+String? canonicalCryptoTicker(String value) {
+  final source = value.toLowerCase();
+  const assets = <String, List<String>>{
+    'BTC': ['bitcoin', 'btc'],
+    'ETH': ['ethereum', 'ether', 'eth'],
+    'BNB': ['binance coin', 'bnb'],
+    'SOL': ['solana', 'sol'],
+    'ADA': ['cardano', 'ada'],
+    'DOGE': ['dogecoin', 'doge'],
+    'XRP': ['ripple', 'xrp'],
+    'USDT': ['tether', 'usdt'],
+    'USDC': ['usd coin', 'usdc'],
+    'AVAX': ['avalanche', 'avax'],
+    'DOT': ['polkadot', 'dot'],
+    'LINK': ['chainlink', 'link'],
+    'LTC': ['litecoin', 'ltc'],
+    'TRX': ['tron', 'trx'],
+    'TON': ['toncoin', 'ton'],
+    'SHIB': ['shiba inu', 'shib'],
+  };
+  for (final entry in assets.entries) {
+    if (entry.value.any(
+      (alias) => RegExp('\\b${RegExp.escape(alias)}\\b').hasMatch(source),
+    )) {
+      return entry.key;
+    }
+  }
+  return null;
+}
+
+String? canonicalBankName(String value) {
+  final source = value
+      .toLowerCase()
+      .replaceAll(RegExp('[àáâãä]'), 'a')
+      .replaceAll(RegExp('[èéêë]'), 'e')
+      .replaceAll(RegExp('[ìíîï]'), 'i')
+      .replaceAll(RegExp('[òóôõö]'), 'o')
+      .replaceAll(RegExp('[ùúûü]'), 'u');
+  const banks = <String, List<String>>{
+    'Nubank': ['nubank'],
+    'Itaú': ['itau'],
+    'Bradesco': ['bradesco'],
+    'Santander': ['santander'],
+    'Banco do Brasil': ['banco do brasil', ' bb '],
+    'Caixa': ['caixa'],
+    'Inter': ['banco inter', 'inter'],
+    'C6 Bank': ['c6'],
+    'BTG Pactual': ['btg'],
+    'XP': [' xp '],
+    'PicPay': ['picpay'],
+    'Mercado Pago': ['mercado pago'],
+    'Neon': ['neon'],
+    'Safra': ['safra'],
+  };
+  final padded = ' $source ';
+  for (final entry in banks.entries) {
+    if (entry.value.any((alias) => padded.contains(alias))) return entry.key;
+  }
+  return null;
+}
+
+String? canonicalMarketAssetName(String value) {
+  final source = value.toLowerCase();
+  final ticker = RegExp(r'\b([a-z]{4}\d{1,2})\b').firstMatch(source)?.group(1);
+  if (ticker != null) return ticker.toUpperCase();
+  if (RegExp(r'\bcdb\b').hasMatch(source)) return 'CDB';
+  if (RegExp(r'\blci\b').hasMatch(source)) return 'LCI';
+  if (RegExp(r'\blca\b').hasMatch(source)) return 'LCA';
+  if (RegExp(r'\btesouro\b').hasMatch(source)) return 'Tesouro Direto';
+  return null;
+}
+
 Map<String, dynamic>? parseTaggedFinanceCommand(
   String original,
   double? amount,
@@ -83,19 +155,23 @@ Map<String, dynamic>? parseTaggedFinanceCommand(
     };
   }
   if (['receita', 'entrada', 'salario'].contains(tag)) {
+    final bank = canonicalBankName(details);
     return {
       'intent': 'create_income',
       'amount': amount,
       'description': original,
       'category': 'Receitas',
+      'bank': bank,
+      'account': bank,
     };
   }
   if (tag == 'investimento' || tag == 'investir') {
+    final investment = canonicalMarketAssetName(details);
     return {
       'intent': 'create_investment',
       'amount': amount,
-      'investment': details.isEmpty ? 'Investimento' : details,
-      'bank': 'Carteira principal',
+      'investment': investment ?? (details.isEmpty ? 'Investimento' : details),
+      'bank': canonicalBankName(details) ?? 'Carteira principal',
     };
   }
   return {
@@ -105,11 +181,7 @@ Map<String, dynamic>? parseTaggedFinanceCommand(
         ? 'create_crypto_conversion'
         : 'create_crypto_purchase',
     'amount': amount,
-    'investment': details.contains('ethereum') || details.contains('eth')
-        ? 'Ethereum'
-        : details.contains('bitcoin') || details.contains('btc')
-        ? 'Bitcoin'
-        : 'Cripto',
+    'investment': canonicalCryptoTicker(details) ?? 'CRIPTO',
   };
 }
 
@@ -361,6 +433,42 @@ class _ChatPageState extends State<ChatPage> {
     final amount = _parseAmount(source);
     final tagged = parseTaggedFinanceCommand(text, amount);
     if (tagged != null) return tagged;
+    final crypto = canonicalCryptoTicker(source);
+    if (crypto != null &&
+        (source.contains('comprei') ||
+            source.contains('cmprei') ||
+            source.contains('comprrei') ||
+            source.contains('adquiri') ||
+            source.contains('vendi') ||
+            source.contains('converti') ||
+            source.contains('troquei'))) {
+      return {
+        'intent': source.contains('vendi')
+            ? 'create_crypto_sale'
+            : source.contains('converti') || source.contains('troquei')
+            ? 'create_crypto_conversion'
+            : 'create_crypto_purchase',
+        'amount': amount,
+        'investment': crypto,
+        'description': crypto,
+      };
+    }
+    final marketAsset = canonicalMarketAssetName(source);
+    if (marketAsset != null &&
+        (source.contains('comprei') ||
+            source.contains('cmprei') ||
+            source.contains('comprrei') ||
+            source.contains('investi') ||
+            source.contains('apliquei') ||
+            source.contains('adquiri'))) {
+      return {
+        'intent': 'create_investment',
+        'amount': amount,
+        'investment': marketAsset,
+        'bank': canonicalBankName(source) ?? 'Carteira principal',
+        'description': marketAsset,
+      };
+    }
     if ((source.contains('zerar') ||
             source.contains('limpar') ||
             source.contains('reiniciar')) &&
@@ -381,11 +489,14 @@ class _ChatPageState extends State<ChatPage> {
     if (source.contains('recebi') ||
         source.contains('salário') ||
         source.contains('salario')) {
+      final bank = canonicalBankName(source);
       return {
         'intent': 'create_income',
         'amount': amount,
         'description': text,
         'category': 'Receitas',
+        'bank': bank,
+        'account': bank,
       };
     }
     if (source.contains('vendi') || source.contains('saquei')) {
@@ -498,15 +609,19 @@ class _ChatPageState extends State<ChatPage> {
             amount: amount,
             kind: EntryKind.income,
             date: DateTime.now(),
+            bank: action['bank'] as String? ?? action['account'] as String?,
           ),
         );
         return;
       case 'create_investment':
+        final investmentName = financeInvestmentLabel(
+          '${action['investment'] ?? 'Investimento'}',
+        );
         widget.onInvestmentCreated(
           InvestmentItem(
-            name: '${action['investment'] ?? 'Investimento'}',
+            name: investmentName,
             institution: '${action['bank'] ?? 'Carteira principal'}',
-            type: 'Renda fixa',
+            type: financeInvestmentType(investmentName),
             amount: amount,
             yieldDescription: 'Registrado pela IA',
           ),
@@ -515,7 +630,7 @@ class _ChatPageState extends State<ChatPage> {
       case 'create_crypto_purchase':
         widget.onCryptoCreated(
           CryptoItem(
-            asset: '${action['investment'] ?? 'Bitcoin'}',
+            asset: financeCryptoLabel('${action['investment'] ?? 'Cripto'}'),
             amount: amount,
             operation: 'Compra',
           ),
@@ -524,7 +639,7 @@ class _ChatPageState extends State<ChatPage> {
       case 'create_crypto_sale':
         widget.onCryptoCreated(
           CryptoItem(
-            asset: '${action['investment'] ?? 'Cripto'}',
+            asset: financeCryptoLabel('${action['investment'] ?? 'Cripto'}'),
             amount: amount,
             operation: 'Venda',
           ),
@@ -533,7 +648,7 @@ class _ChatPageState extends State<ChatPage> {
       case 'create_crypto_conversion':
         widget.onCryptoCreated(
           CryptoItem(
-            asset: '${action['investment'] ?? 'Cripto'}',
+            asset: financeCryptoLabel('${action['investment'] ?? 'Cripto'}'),
             amount: amount,
             operation: 'Conversão',
           ),
@@ -568,10 +683,16 @@ class _ChatPageState extends State<ChatPage> {
           : 'Despesa adicionada à conta principal.';
     }
     return switch (action['intent']) {
-      'create_income' => 'Receita adicionada.',
-      'create_investment' => 'Investimento adicionado.',
-      'create_crypto_purchase' => 'Compra de cripto registrada.',
-      'create_crypto_sale' => 'Venda de cripto registrada.',
+      'create_income' =>
+        action['bank'] == null
+            ? 'Receita adicionada.'
+            : '${action['bank']} · Receita adicionada.',
+      'create_investment' =>
+        '${financeInvestmentLabel('${action['investment'] ?? 'Investimento'}')} · Investimento adicionado.',
+      'create_crypto_purchase' =>
+        '${financeCryptoLabel('${action['investment'] ?? 'Cripto'}')} · Compra registrada.',
+      'create_crypto_sale' =>
+        '${financeCryptoLabel('${action['investment'] ?? 'Cripto'}')} · Venda registrada.',
       'reset_account' =>
         'Vou pedir sua confirmação antes de zerar os valores da conta.',
       _ =>

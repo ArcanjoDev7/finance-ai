@@ -1,5 +1,6 @@
 import 'package:finance_ai/core/failure/result.dart';
 import 'package:finance_ai/features/chat_ai/presentation/chat_page.dart';
+import 'package:finance_ai/features/dashboard/presentation/pages/dashboard_preview_page.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -51,4 +52,18 @@ void main() {
       expect(filterFinanceCommandSuggestions('comprei'), isEmpty);
     },
   );
+
+  test('Crypto, stock and bank labels are normalized for display', () {
+    expect(canonicalCryptoTicker('cmprei bnb por 100'), 'BNB');
+    expect(financeCryptoLabel('ethereum'), 'ETH');
+    expect(financeInvestmentLabel('petr4'), 'PETR4');
+    expect(financeInvestmentType('PETR4'), 'Ação');
+    expect(canonicalMarketAssetName('cmprei petr4 por 100'), 'PETR4');
+    expect(canonicalBankName('recebi no Nubank'), 'Nubank');
+
+    final income = parseTaggedFinanceCommand('@receita Nubank 500', 500);
+    expect(income?['bank'], 'Nubank');
+    final crypto = parseTaggedFinanceCommand('@cripto bnb 100', 100);
+    expect(crypto?['investment'], 'BNB');
+  });
 }

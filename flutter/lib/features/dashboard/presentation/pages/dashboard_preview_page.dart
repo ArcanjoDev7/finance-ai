@@ -29,6 +29,7 @@ class FinanceEntry {
     required this.kind,
     required this.date,
     this.isCard = false,
+    this.bank,
   });
   final String id;
   final String description;
@@ -37,6 +38,7 @@ class FinanceEntry {
   final EntryKind kind;
   final DateTime date;
   final bool isCard;
+  final String? bank;
 }
 
 class InvestmentItem {
@@ -63,6 +65,64 @@ class CryptoItem {
   final String asset;
   final double amount;
   final String operation;
+}
+
+String financeCryptoLabel(String value) {
+  final normalized = value.trim();
+  const aliases = <String, String>{
+    'bitcoin': 'BTC',
+    'btc': 'BTC',
+    'ethereum': 'ETH',
+    'ether': 'ETH',
+    'eth': 'ETH',
+    'binance coin': 'BNB',
+    'bnb': 'BNB',
+    'solana': 'SOL',
+    'sol': 'SOL',
+    'cardano': 'ADA',
+    'ada': 'ADA',
+    'dogecoin': 'DOGE',
+    'doge': 'DOGE',
+    'ripple': 'XRP',
+    'xrp': 'XRP',
+    'tether': 'USDT',
+    'usdt': 'USDT',
+    'usd coin': 'USDC',
+    'usdc': 'USDC',
+    'avalanche': 'AVAX',
+    'avax': 'AVAX',
+    'polkadot': 'DOT',
+    'dot': 'DOT',
+    'chainlink': 'LINK',
+    'link': 'LINK',
+    'litecoin': 'LTC',
+    'ltc': 'LTC',
+    'tron': 'TRX',
+    'trx': 'TRX',
+    'toncoin': 'TON',
+    'ton': 'TON',
+    'shiba inu': 'SHIB',
+    'shib': 'SHIB',
+  };
+  return aliases[normalized.toLowerCase()] ??
+      (normalized.length <= 10 ? normalized.toUpperCase() : normalized);
+}
+
+String financeInvestmentLabel(String value) {
+  final normalized = value.trim();
+  if (RegExp(r'^[a-zA-Z]{4}\d{1,2}$').hasMatch(normalized)) {
+    return normalized.toUpperCase();
+  }
+  return normalized;
+}
+
+String financeInvestmentType(String value) {
+  final label = financeInvestmentLabel(value);
+  if (RegExp(r'^[A-Z]{4}\d{1,2}$').hasMatch(label)) return 'Ação';
+  if (const ['CDB', 'LCI', 'LCA', 'Tesouro Direto'].contains(label)) {
+    return 'Renda fixa';
+  }
+  return 'Investimento';
 }
 
 class DashboardPreviewPage extends StatefulWidget {
@@ -267,15 +327,22 @@ class _DashboardPreviewPageState extends State<DashboardPreviewPage> {
               isCard: '${metadata['account'] ?? ''}'.toLowerCase().contains(
                 'cart',
               ),
+              bank:
+                  metadata['bank'] as String? ??
+                  (type == 'income' ? metadata['account'] as String? : null),
             ),
           );
         }
         if (type == 'investment') {
           investments.add(
             InvestmentItem(
-              name: '${metadata['investment'] ?? description}',
-              institution: 'Carteira principal',
-              type: 'Renda fixa',
+              name: financeInvestmentLabel(
+                '${metadata['investment'] ?? description}',
+              ),
+              institution: '${metadata['bank'] ?? 'Carteira principal'}',
+              type: financeInvestmentType(
+                '${metadata['investment'] ?? description}',
+              ),
               amount: amount,
               yieldDescription: 'Sincronizado',
             ),
@@ -284,7 +351,9 @@ class _DashboardPreviewPageState extends State<DashboardPreviewPage> {
         if (type == 'crypto_buy' || type == 'crypto_sell') {
           cryptos.add(
             CryptoItem(
-              asset: '${metadata['investment'] ?? description}',
+              asset: financeCryptoLabel(
+                '${metadata['investment'] ?? description}',
+              ),
               amount: amount,
               operation: type == 'crypto_sell' ? 'Venda' : 'Compra',
             ),
@@ -332,6 +401,7 @@ class _DashboardPreviewPageState extends State<DashboardPreviewPage> {
                   : EntryKind.expense,
               date: DateTime.parse(item['date'] as String),
               isCard: item['isCard'] == true,
+              bank: item['bank'] as String?,
             ),
           ),
         );
@@ -376,6 +446,7 @@ class _DashboardPreviewPageState extends State<DashboardPreviewPage> {
               'kind': item.kind.name,
               'date': item.date.toIso8601String(),
               'isCard': item.isCard,
+              'bank': item.bank,
             },
           )
           .toList(),
@@ -478,6 +549,7 @@ class _DashboardPreviewPageState extends State<DashboardPreviewPage> {
         kind: entry.kind,
         date: entry.date,
         isCard: isCard,
+        bank: entry.bank,
       ),
     );
     ScaffoldMessenger.of(context).showSnackBar(
@@ -1755,11 +1827,11 @@ class _InvestmentsPage extends StatelessWidget {
                           contentPadding: const EdgeInsets.symmetric(
                             vertical: 6,
                           ),
-                          leading: CircleAvatar(
-                            backgroundColor: const Color(0xFF173C6B),
-                            child: const Icon(Icons.show_chart_rounded),
+                          leading: _FinancialIdentityAvatar(
+                            label: item.name,
+                            kind: _IdentityKind.investment,
                           ),
-                          title: Text(item.name),
+                          title: Text(financeInvestmentLabel(item.name)),
                           subtitle: Text(
                             '${item.type} · ${item.institution} · ${item.yieldDescription}',
                           ),
@@ -1831,11 +1903,11 @@ class _CryptoPage extends StatelessWidget {
                   children: items
                       .map(
                         (item) => ListTile(
-                          leading: CircleAvatar(
-                            backgroundColor: const Color(0xFF5A3D12),
-                            child: const Icon(Icons.currency_bitcoin),
+                          leading: _FinancialIdentityAvatar(
+                            label: item.asset,
+                            kind: _IdentityKind.crypto,
                           ),
-                          title: Text(item.asset),
+                          title: Text(financeCryptoLabel(item.asset)),
                           subtitle: Text(item.operation),
                           trailing: _FinancialValue(
                             value: item.amount,
@@ -2866,6 +2938,104 @@ class _MetricCard extends StatelessWidget {
   }
 }
 
+enum _IdentityKind { crypto, investment, bank }
+
+class _FinancialIdentityAvatar extends StatelessWidget {
+  const _FinancialIdentityAvatar({required this.label, required this.kind});
+
+  final String label;
+  final _IdentityKind kind;
+
+  (String, Color, Color) get _visual {
+    final value = label.trim().toLowerCase();
+    if (kind == _IdentityKind.bank) {
+      if (value.contains('nubank')) {
+        return ('Nu', const Color(0xFF820AD1), Colors.white);
+      }
+      if (value.contains('itaú') || value.contains('itau')) {
+        return ('itaú', const Color(0xFFEC7000), Colors.white);
+      }
+      if (value.contains('bradesco')) {
+        return ('B', const Color(0xFFCC092F), Colors.white);
+      }
+      if (value.contains('santander')) {
+        return ('S', const Color(0xFFEC0000), Colors.white);
+      }
+      if (value.contains('brasil')) {
+        return ('BB', const Color(0xFFFFE600), const Color(0xFF0038A8));
+      }
+      if (value.contains('caixa')) {
+        return ('CX', const Color(0xFF0066A6), Colors.white);
+      }
+      if (value.contains('inter')) {
+        return ('inter', const Color(0xFFFF7A00), Colors.white);
+      }
+      if (value.contains('c6')) {
+        return ('C6', const Color(0xFF242424), Colors.white);
+      }
+      if (value.contains('xp')) {
+        return ('XP', const Color(0xFF111111), const Color(0xFFFFD400));
+      }
+      if (value.contains('picpay')) {
+        return ('P', const Color(0xFF21C25E), Colors.white);
+      }
+      if (value.contains('mercado pago')) {
+        return ('MP', const Color(0xFF00AEEF), Colors.white);
+      }
+      if (value.contains('btg')) {
+        return ('BTG', const Color(0xFF162B75), Colors.white);
+      }
+    }
+
+    final code = kind == _IdentityKind.crypto
+        ? financeCryptoLabel(label)
+        : financeInvestmentLabel(label);
+    final palette = kind == _IdentityKind.crypto
+        ? const [
+            Color(0xFFF3BA2F),
+            Color(0xFF627EEA),
+            Color(0xFF14F195),
+            Color(0xFF8B5CF6),
+            Color(0xFF3B82F6),
+          ]
+        : const [
+            Color(0xFF2563EB),
+            Color(0xFF7C3AED),
+            Color(0xFF0F766E),
+            Color(0xFFB45309),
+          ];
+    final index =
+        code.codeUnits.fold<int>(0, (sum, unit) => sum + unit) % palette.length;
+    final shortCode = code.length <= 5
+        ? code
+        : code
+              .split(RegExp(r'\s+'))
+              .where((part) => part.isNotEmpty)
+              .take(3)
+              .map((part) => part[0])
+              .join()
+              .toUpperCase();
+    return (shortCode, palette[index], Colors.white);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final visual = _visual;
+    return CircleAvatar(
+      backgroundColor: visual.$2,
+      child: Text(
+        visual.$1,
+        maxLines: 1,
+        style: TextStyle(
+          color: visual.$3,
+          fontSize: visual.$1.length > 3 ? 9 : 12,
+          fontWeight: FontWeight.w900,
+        ),
+      ),
+    );
+  }
+}
+
 class _EntryRow extends StatelessWidget {
   const _EntryRow({
     required this.entry,
@@ -2880,20 +3050,25 @@ class _EntryRow extends StatelessWidget {
     final expense = entry.kind == EntryKind.expense;
     return ListTile(
       contentPadding: const EdgeInsets.symmetric(vertical: 5),
-      leading: CircleAvatar(
-        backgroundColor: expense
-            ? const Color(0xFF4A202D)
-            : const Color(0xFF153D35),
-        child: Icon(
-          expense ? Icons.arrow_upward : Icons.arrow_downward,
-          color: expense ? AppColors.negative : AppColors.positive,
-        ),
-      ),
+      leading: !expense && entry.bank != null && entry.bank!.trim().isNotEmpty
+          ? _FinancialIdentityAvatar(
+              label: entry.bank!,
+              kind: _IdentityKind.bank,
+            )
+          : CircleAvatar(
+              backgroundColor: expense
+                  ? const Color(0xFF4A202D)
+                  : const Color(0xFF153D35),
+              child: Icon(
+                expense ? Icons.arrow_upward : Icons.arrow_downward,
+                color: expense ? AppColors.negative : AppColors.positive,
+              ),
+            ),
       title: Text(entry.description),
       subtitle: Text(
         detailed
-            ? '${entry.category} · ${_date(entry.date)} · Conta principal'
-            : '${entry.category} · ${_date(entry.date)}',
+            ? '${entry.category} · ${_date(entry.date)} · ${entry.bank ?? 'Conta principal'}'
+            : '${entry.category} · ${_date(entry.date)}${entry.bank == null ? '' : ' · ${entry.bank}'}',
       ),
       trailing: _FinancialValue(
         value: entry.amount,

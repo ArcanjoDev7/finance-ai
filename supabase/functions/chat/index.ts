@@ -151,11 +151,84 @@ function parseBrlAmount(value: string) {
   return Number.isFinite(amount) && amount > 0 ? amount : undefined;
 }
 
+function canonicalCryptoAsset(value: string) {
+  const text = normalizeText(value);
+  const assets: Array<[RegExp, string]> = [
+    [/\b(bitcoin|btc)\b/, 'BTC'], [/\b(ethereum|ether|eth)\b/, 'ETH'],
+    [/\b(binance coin|bnb)\b/, 'BNB'], [/\b(solana|sol)\b/, 'SOL'],
+    [/\b(cardano|ada)\b/, 'ADA'], [/\b(dogecoin|doge)\b/, 'DOGE'],
+    [/\b(ripple|xrp)\b/, 'XRP'], [/\b(tether|usdt)\b/, 'USDT'],
+    [/\b(usd coin|usdc)\b/, 'USDC'], [/\b(avalanche|avax)\b/, 'AVAX'],
+    [/\b(polkadot|dot)\b/, 'DOT'], [/\b(chainlink|link)\b/, 'LINK'],
+    [/\b(litecoin|ltc)\b/, 'LTC'], [/\b(tron|trx)\b/, 'TRX'],
+    [/\b(toncoin|ton)\b/, 'TON'], [/\b(shiba inu|shib)\b/, 'SHIB'],
+  ];
+  return assets.find(([pattern]) => pattern.test(text))?.[1];
+}
+
+function canonicalBank(value: string) {
+  const text = normalizeText(value);
+  const banks: Array<[RegExp, string]> = [
+    [/\bnubank\b/, 'Nubank'], [/\bitau\b/, 'Itaú'],
+    [/\bbradesco\b/, 'Bradesco'], [/\bsantander\b/, 'Santander'],
+    [/\b(banco do brasil|bb)\b/, 'Banco do Brasil'], [/\bcaixa\b/, 'Caixa'],
+    [/\b(banco inter|inter)\b/, 'Inter'], [/\bc6\b/, 'C6 Bank'],
+    [/\bbtg\b/, 'BTG Pactual'], [/\bxp\b/, 'XP'], [/\bpicpay\b/, 'PicPay'],
+    [/\bmercado pago\b/, 'Mercado Pago'], [/\bneon\b/, 'Neon'], [/\bsafra\b/, 'Safra'],
+  ];
+  return banks.find(([pattern]) => pattern.test(text))?.[1];
+}
+
+function canonicalMarketAsset(value: string) {
+  const text = normalizeText(value);
+  const ticker = text.match(/\b([a-z]{4}\d{1,2})\b/)?.[1];
+  if (ticker) return ticker.toUpperCase();
+  if (/\bcdb\b/.test(text)) return 'CDB';
+  if (/\blci\b/.test(text)) return 'LCI';
+  if (/\blca\b/.test(text)) return 'LCA';
+  if (/\btesouro\b/.test(text)) return 'Tesouro Direto';
+  return undefined;
+}
+
+function directCompletedCrypto(message: string): FinanceAction | null {
+  const text = normalizeText(message);
+  const investment = canonicalCryptoAsset(text);
+  if (!investment || !/\b(comprei|cmprei|comprrei|adquiri|vendi|converti|troquei)\b/.test(text)) return null;
+  if (text.includes('?') || /\b(quanto|como|posso|devo|vou|quero|pretendo)\b/.test(text)) return null;
+  const amount = parseBrlAmount(message);
+  if (!amount) return { intent: 'needs_clarification', investment, answer: `Qual foi o valor da operação com ${investment}?`, confidence: 1 };
+  const intent = /\bvendi\b/.test(text)
+    ? 'create_crypto_sale'
+    : /\b(converti|troquei)\b/.test(text) ? 'create_crypto_conversion' : 'create_crypto_purchase';
+  const operation = intent === 'create_crypto_sale' ? 'Venda' : intent === 'create_crypto_conversion' ? 'Conversão' : 'Compra';
+  return { intent, amount, currency: 'BRL', investment, description: `${investment} · ${operation}`, confidence: 1 };
+}
+
+function directCompletedInvestment(message: string): FinanceAction | null {
+  const text = normalizeText(message);
+  const investment = canonicalMarketAsset(text);
+  if (!investment || !/\b(investi|apliquei|comprei|cmprei|comprrei|adquiri)\b/.test(text)) return null;
+  if (text.includes('?') || /\b(quanto|como|posso|devo|vou|quero|pretendo)\b/.test(text)) return null;
+  const amount = parseBrlAmount(message);
+  if (!amount) return { intent: 'needs_clarification', investment, answer: `Qual foi o valor investido em ${investment}?`, confidence: 1 };
+  return { intent: 'create_investment', amount, currency: 'BRL', investment, bank: canonicalBank(text) ?? 'Carteira principal', description: `${investment} · Compra`, confidence: 1 };
+}
+
+function directCompletedBankIncome(message: string): FinanceAction | null {
+  const text = normalizeText(message);
+  const bank = canonicalBank(text);
+  if (!bank || !/\b(recebi|ganhei|caiu|depositaram|salario)\b/.test(text)) return null;
+  if (text.includes('?') || /\b(quanto|como|posso|devo|vou|quero|pretendo)\b/.test(text)) return null;
+  const amount = parseBrlAmount(message);
+  if (!amount) return { intent: 'needs_clarification', bank, answer: `Qual foi o valor recebido no ${bank}?`, confidence: 1 };
+  return { intent: 'create_income', amount, currency: 'BRL', category: 'Receitas', bank, account: bank, description: `Recebimento · ${bank}`, confidence: 1 };
+}
+
 function directCompletedPurchase(message: string): FinanceAction | null {
   const text = normalizeText(message);
   if (!/\b(comprei|adquiri|gastei|paguei)\b/.test(text)) return null;
   if (/\b(quanto|como|posso|devo|vou|quero|pretendo)\b/.test(text) || text.includes('?')) return null;
-  if (/\b(bitcoin|btc|ethereum|eth|cripto|cdb|lci|lca|tesouro|acao|acoes|etf|fii|fundo)\b/.test(text)) {
+  if (canonicalCryptoAsset(text) || canonicalMarketAsset(text) || /\b(cripto|acao|acoes|etf|fii|fundo)\b/.test(text)) {
     return null;
   }
   const amount = parseBrlAmount(message);
@@ -226,23 +299,20 @@ function directTaggedCommand(message: string): FinanceAction | null {
   }
 
   if (['receita', 'entrada', 'salario'].includes(rawTag)) {
-    return { ...common, intent: 'create_income', category: 'Receitas' };
+    const bank = canonicalBank(details);
+    return { ...common, intent: 'create_income', category: 'Receitas', bank, account: bank };
   }
 
   if (rawTag === 'investimento' || rawTag === 'investir') {
     return {
       ...common,
       intent: 'create_investment',
-      investment: description || 'Investimento',
-      bank: 'Carteira principal',
+      investment: canonicalMarketAsset(details) ?? (description || 'Investimento'),
+      bank: canonicalBank(details) ?? 'Carteira principal',
     };
   }
 
-  const investment = /\b(ethereum|eth)\b/.test(details)
-    ? 'Ethereum'
-    : /\b(bitcoin|btc)\b/.test(details)
-      ? 'Bitcoin'
-      : description || 'Cripto';
+  const investment = canonicalCryptoAsset(details) ?? (description || 'Cripto').toUpperCase();
   const intent = /\b(vendi|venda|saquei|resgatei)\b/.test(details)
     ? 'create_crypto_sale'
     : /\b(converti|conversao|troquei)\b/.test(details)
@@ -346,12 +416,8 @@ async function directQuery(
     };
   }
 
-  if (/\b(bitcoin|btc|ethereum|eth|cripto|criptomoeda)\b/.test(text) && /\b(tenho|possuo|saldo|quanto)\b/.test(text)) {
-    const asset = text.includes('bitcoin') || text.includes('btc')
-      ? 'Bitcoin'
-      : text.includes('ethereum') || text.includes('eth')
-        ? 'Ethereum'
-        : null;
+  if ((canonicalCryptoAsset(text) || /\b(cripto|criptomoeda)\b/.test(text)) && /\b(tenho|possuo|saldo|quanto)\b/.test(text)) {
+    const asset = canonicalCryptoAsset(text) ?? null;
     let query = admin
       .from('transactions')
       .select('amount_minor,transaction_type,metadata')
@@ -451,7 +517,7 @@ async function persistFinancialAction(admin: ReturnType<typeof createClient>, us
     transaction_type: transactionType,
     occurred_at: action.date ? `${action.date}T12:00:00.000Z` : new Date().toISOString(),
     idempotency_key: idempotencyKey,
-    metadata: { source: 'ai', category: action.category, investment: action.investment, quantity: action.quantity, account: action.account },
+    metadata: { source: 'ai', category: action.category, investment: action.investment, quantity: action.quantity, account: action.account, bank: action.bank, wallet: action.wallet },
   }).select('id').single();
   if (error) throw new Error('TRANSACTION_CREATION_FAILED');
   return transaction.id as string;
@@ -566,7 +632,11 @@ Deno.serve(async (request) => {
     .single();
   if (actionError) return response({ error: { code: 'ACTION_CREATION_FAILED' } }, 500);
 
-  const directAction = directTaggedCommand(payload.message) ?? directCompletedPurchase(payload.message);
+  const directAction = directTaggedCommand(payload.message) ??
+    directCompletedCrypto(payload.message) ??
+    directCompletedInvestment(payload.message) ??
+    directCompletedBankIncome(payload.message) ??
+    directCompletedPurchase(payload.message);
   if (directAction) {
     const occurredDate = explicitOccurredDate(payload.message);
     if (occurredDate) directAction.date = occurredDate;
@@ -625,6 +695,9 @@ Regras:
 8. Extraia quando aplicável: intent, amount numérico em reais, currency, category, description, date (YYYY-MM-DD), account, quantity, investment, bank, wallet, answer e confidence (0 a 1). Nunca invente valores.
 9. Se a mensagem contiver duas ou mais movimentações, devolva {"actions":[...]} com uma ação separada para cada movimentação. Nunca some valores nem descarte uma delas.
 10. "Guardar", "poupar", "separar para reserva" ou colocar dinheiro em cofrinho/caixinha é create_investment; use o nome do destino em investment.
+11. Corrija erros de digitação evidentes em verbos financeiros, por exemplo "cmprei BNB" significa "comprei BNB". Nunca altere o valor informado.
+12. Para criptomoedas, normalize investment para o ticker em maiúsculas quando reconhecido (BTC, ETH, BNB, SOL, ADA, DOGE, XRP, USDT, USDC, AVAX, DOT, LINK, LTC, TRX, TON ou SHIB).
+13. Para ações, preserve o ticker em maiúsculas (por exemplo PETR4). Quando uma receita mencionar a instituição de origem, preencha bank com o nome normalizado do banco.
 
 Formato para uma ação: {"intent":"...","amount":0,"description":"...","confidence":0.0}.
 Formato para várias: {"actions":[{"intent":"..."},{"intent":"..."}]}.
