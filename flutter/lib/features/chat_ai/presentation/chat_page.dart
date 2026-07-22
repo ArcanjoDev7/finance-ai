@@ -54,12 +54,12 @@ List<String> filterFinanceCommandSuggestions(String input) {
 String? canonicalCryptoTicker(String value) {
   final source = value.toLowerCase();
   const assets = <String, List<String>>{
-    'BTC': ['bitcoin', 'btc'],
-    'ETH': ['ethereum', 'ether', 'eth'],
+    'BTC': ['bitcoin', 'biticoin', 'bitcon', 'btc'],
+    'ETH': ['ethereum', 'etherium', 'ether', 'eth'],
     'BNB': ['binance coin', 'bnb'],
     'SOL': ['solana', 'sol'],
     'ADA': ['cardano', 'ada'],
-    'DOGE': ['dogecoin', 'doge'],
+    'DOGE': ['dogecoin', 'dogcoin', 'dog coin', 'doge'],
     'XRP': ['ripple', 'xrp'],
     'USDT': ['tether', 'usdt'],
     'USDC': ['usd coin', 'usdc'],
@@ -123,6 +123,23 @@ String? canonicalMarketAssetName(String value) {
   return null;
 }
 
+String cleanFinanceDescription(String value, {required String fallback}) {
+  final cleaned = value
+      .replaceFirst(RegExp(r'^@\w+\s*', caseSensitive: false), '')
+      .replaceAll(RegExp(r'(?:r\$\s*)?\d[\d.,]*', caseSensitive: false), '')
+      .replaceAll(
+        RegExp(
+          r'\b(comprei|cmprei|comprrei|adquiri|gastei|paguei|recebi|ganhei|caiu|depositaram|conto|reais|por|de|em|no|na|do|da)\b',
+          caseSensitive: false,
+        ),
+        ' ',
+      )
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .trim();
+  if (cleaned.isEmpty) return fallback;
+  return '${cleaned[0].toUpperCase()}${cleaned.substring(1)}';
+}
+
 Map<String, dynamic>? parseTaggedFinanceCommand(
   String original,
   double? amount,
@@ -140,11 +157,17 @@ Map<String, dynamic>? parseTaggedFinanceCommand(
       'answer': 'Informe o valor no mesmo comando. Ex.: @$tag Bitcoin 100',
     };
   }
+  final cleanDescription = cleanFinanceDescription(
+    details,
+    fallback: 'Movimentação',
+  );
   if (['despesa', 'dispesa', 'gasto', 'saida', 'cartao'].contains(tag)) {
     return {
       'intent': 'create_expense',
       'amount': amount,
-      'description': original,
+      'description': cleanDescription == 'Movimentação'
+          ? 'Despesa'
+          : cleanDescription,
       'category': details.contains('mercado') ? 'Alimentação' : 'Outros',
       'account':
           tag == 'cartao' ||
@@ -159,7 +182,7 @@ Map<String, dynamic>? parseTaggedFinanceCommand(
     return {
       'intent': 'create_income',
       'amount': amount,
-      'description': original,
+      'description': bank == null ? 'Receita' : 'Recebimento · $bank',
       'category': 'Receitas',
       'bank': bank,
       'account': bank,
@@ -439,6 +462,8 @@ class _ChatPageState extends State<ChatPage> {
             source.contains('cmprei') ||
             source.contains('comprrei') ||
             source.contains('adquiri') ||
+            source.contains('gastei') ||
+            source.contains('paguei') ||
             source.contains('vendi') ||
             source.contains('converti') ||
             source.contains('troquei'))) {
@@ -478,11 +503,13 @@ class _ChatPageState extends State<ChatPage> {
     if (source.contains('gastei') ||
         source.contains('paguei') ||
         source.contains('comprei') ||
+        source.contains('cmprei') ||
+        source.contains('comprrei') ||
         source.contains('adquiri')) {
       return {
         'intent': 'create_expense',
         'amount': amount,
-        'description': text,
+        'description': cleanFinanceDescription(text, fallback: 'Despesa'),
         'category': source.contains('mercado') ? 'Alimentação' : 'Outros',
       };
     }
@@ -493,7 +520,11 @@ class _ChatPageState extends State<ChatPage> {
       return {
         'intent': 'create_income',
         'amount': amount,
-        'description': text,
+        'description': source.contains('salário') || source.contains('salario')
+            ? 'Salário'
+            : bank == null
+            ? cleanFinanceDescription(text, fallback: 'Receita')
+            : 'Recebimento · $bank',
         'category': 'Receitas',
         'bank': bank,
         'account': bank,

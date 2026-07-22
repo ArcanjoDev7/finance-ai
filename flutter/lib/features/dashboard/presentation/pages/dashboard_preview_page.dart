@@ -5,6 +5,7 @@ import 'package:finance_ai/app/theme/app_theme.dart';
 import 'package:finance_ai/core/services/supabase_web_client.dart';
 import 'package:finance_ai/features/chat_ai/presentation/chat_page.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 
 enum FinancePage {
   dashboard,
@@ -2946,6 +2947,49 @@ class _FinancialIdentityAvatar extends StatelessWidget {
   final String label;
   final _IdentityKind kind;
 
+  String? get _brandUrl {
+    final value = label.trim().toLowerCase();
+    if (kind == _IdentityKind.crypto) {
+      final symbol = financeCryptoLabel(label).toLowerCase();
+      if (const {
+        'btc',
+        'eth',
+        'bnb',
+        'sol',
+        'ada',
+        'doge',
+        'xrp',
+        'usdt',
+        'usdc',
+        'avax',
+        'dot',
+        'link',
+        'ltc',
+        'trx',
+      }.contains(symbol)) {
+        return 'https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons@master/svg/color/$symbol.svg';
+      }
+      return null;
+    }
+    if (kind == _IdentityKind.bank) {
+      if (value.contains('nubank')) {
+        return 'https://cdn.simpleicons.org/nubank';
+      }
+      if (value.contains('picpay')) {
+        return 'https://cdn.simpleicons.org/picpay';
+      }
+      if (value.contains('mercado pago')) {
+        return 'https://cdn.simpleicons.org/mercadopago';
+      }
+      return null;
+    }
+    final ticker = financeInvestmentLabel(label).toUpperCase();
+    if (RegExp(r'^[A-Z]{4}\d{1,2}$').hasMatch(ticker)) {
+      return 'https://icons.brapi.dev/icons/$ticker.svg';
+    }
+    return null;
+  }
+
   (String, Color, Color) get _visual {
     final value = label.trim().toLowerCase();
     if (kind == _IdentityKind.bank) {
@@ -3021,6 +3065,42 @@ class _FinancialIdentityAvatar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final visual = _visual;
+    final brandUrl = _brandUrl;
+    if (brandUrl != null) {
+      return Semantics(
+        label: 'Logo de $label',
+        image: true,
+        child: Container(
+          width: 42,
+          height: 42,
+          padding: const EdgeInsets.all(9),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            shape: BoxShape.circle,
+            border: Border.all(color: Colors.white.withOpacity(.14)),
+          ),
+          child: SvgPicture.network(
+            brandUrl,
+            fit: BoxFit.contain,
+            placeholderBuilder: (_) => const SizedBox.square(
+              dimension: 18,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+            errorBuilder: (_, _, _) => Center(
+              child: Text(
+                visual.$1,
+                maxLines: 1,
+                style: TextStyle(
+                  color: visual.$2,
+                  fontSize: visual.$1.length > 3 ? 8 : 11,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
     return CircleAvatar(
       backgroundColor: visual.$2,
       child: Text(

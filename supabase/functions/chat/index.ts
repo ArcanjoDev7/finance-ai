@@ -128,6 +128,18 @@ function normalizeText(value: string) {
     .toLowerCase();
 }
 
+function cleanMovementDescription(value: string, fallback: string) {
+  const cleaned = value
+    .replace(/^@\w+\s*/i, '')
+    .replace(/(?:r\$\s*)?\d[\d.,]*/gi, '')
+    .replace(/\b(comprei|cmprei|comprrei|adquiri|gastei|paguei|recebi|ganhei|caiu|depositaram|conto|reais)\b/gi, ' ')
+    .replace(/\b(por|de|em|no|na|do|da)\b/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!cleaned) return fallback;
+  return cleaned[0].toUpperCase() + cleaned.slice(1);
+}
+
 function parseBrlAmount(value: string) {
   const matches = [...value.matchAll(/(?:r\$\s*)?(\d[\d.,]*)/gi)];
   if (matches.length === 0) return undefined;
@@ -154,9 +166,9 @@ function parseBrlAmount(value: string) {
 function canonicalCryptoAsset(value: string) {
   const text = normalizeText(value);
   const assets: Array<[RegExp, string]> = [
-    [/\b(bitcoin|btc)\b/, 'BTC'], [/\b(ethereum|ether|eth)\b/, 'ETH'],
+    [/\b(bitcoin|biticoin|bitcon|btc)\b/, 'BTC'], [/\b(ethereum|etherium|ether|eth)\b/, 'ETH'],
     [/\b(binance coin|bnb)\b/, 'BNB'], [/\b(solana|sol)\b/, 'SOL'],
-    [/\b(cardano|ada)\b/, 'ADA'], [/\b(dogecoin|doge)\b/, 'DOGE'],
+    [/\b(cardano|ada)\b/, 'ADA'], [/\b(dogecoin|dogcoin|dog coin|doge)\b/, 'DOGE'],
     [/\b(ripple|xrp)\b/, 'XRP'], [/\b(tether|usdt)\b/, 'USDT'],
     [/\b(usd coin|usdc)\b/, 'USDC'], [/\b(avalanche|avax)\b/, 'AVAX'],
     [/\b(polkadot|dot)\b/, 'DOT'], [/\b(chainlink|link)\b/, 'LINK'],
@@ -193,7 +205,7 @@ function canonicalMarketAsset(value: string) {
 function directCompletedCrypto(message: string): FinanceAction | null {
   const text = normalizeText(message);
   const investment = canonicalCryptoAsset(text);
-  if (!investment || !/\b(comprei|cmprei|comprrei|adquiri|vendi|converti|troquei)\b/.test(text)) return null;
+  if (!investment || !/\b(comprei|cmprei|comprrei|adquiri|gastei|paguei|vendi|converti|troquei)\b/.test(text)) return null;
   if (text.includes('?') || /\b(quanto|como|posso|devo|vou|quero|pretendo)\b/.test(text)) return null;
   const amount = parseBrlAmount(message);
   if (!amount) return { intent: 'needs_clarification', investment, answer: `Qual foi o valor da operação com ${investment}?`, confidence: 1 };
@@ -217,16 +229,35 @@ function directCompletedInvestment(message: string): FinanceAction | null {
 function directCompletedBankIncome(message: string): FinanceAction | null {
   const text = normalizeText(message);
   const bank = canonicalBank(text);
-  if (!bank || !/\b(recebi|ganhei|caiu|depositaram|salario)\b/.test(text)) return null;
+  if (!/\b(recebi|ganhei|caiu|depositaram|salario)\b/.test(text)) return null;
   if (text.includes('?') || /\b(quanto|como|posso|devo|vou|quero|pretendo)\b/.test(text)) return null;
   const amount = parseBrlAmount(message);
-  if (!amount) return { intent: 'needs_clarification', bank, answer: `Qual foi o valor recebido no ${bank}?`, confidence: 1 };
-  return { intent: 'create_income', amount, currency: 'BRL', category: 'Receitas', bank, account: bank, description: `Recebimento · ${bank}`, confidence: 1 };
+  if (!amount) {
+    return {
+      intent: 'needs_clarification',
+      bank,
+      answer: bank ? `Qual foi o valor recebido no ${bank}?` : 'Qual foi o valor recebido?',
+      confidence: 1,
+    };
+  }
+  const description = /\bsalario\b/.test(text)
+    ? 'Salário'
+    : bank ? `Recebimento · ${bank}` : cleanMovementDescription(message, 'Receita');
+  return {
+    intent: 'create_income',
+    amount,
+    currency: 'BRL',
+    category: 'Receitas',
+    bank,
+    account: bank ?? 'Conta principal',
+    description,
+    confidence: 1,
+  };
 }
 
 function directCompletedPurchase(message: string): FinanceAction | null {
   const text = normalizeText(message);
-  if (!/\b(comprei|adquiri|gastei|paguei)\b/.test(text)) return null;
+  if (!/\b(comprei|cmprei|comprrei|adquiri|gastei|paguei)\b/.test(text)) return null;
   if (/\b(quanto|como|posso|devo|vou|quero|pretendo)\b/.test(text) || text.includes('?')) return null;
   if (canonicalCryptoAsset(text) || canonicalMarketAsset(text) || /\b(cripto|acao|acoes|etf|fii|fundo)\b/.test(text)) {
     return null;
@@ -247,7 +278,7 @@ function directCompletedPurchase(message: string): FinanceAction | null {
     amount,
     currency: 'BRL',
     category,
-    description: message.trim(),
+    description: cleanMovementDescription(message, 'Despesa'),
     account: /\b(cartao|credito|fatura)\b/.test(text) ? 'Cartão' : 'Conta principal',
     confidence: 1,
   };
@@ -270,13 +301,13 @@ function directTaggedCommand(message: string): FinanceAction | null {
 
   const description = details
     .replace(/(?:r\$\s*)?\d[\d.,]*/gi, '')
-    .replace(/\b(por|de|em|no|na|do|da|comprei|compra|vendi|venda|recebi|gastei|paguei|investi)\b/gi, ' ')
+    .replace(/\b(por|de|em|no|na|do|da|comprei|compra|vendi|venda|recebi|gastei|paguei|investi|conto|reais)\b/gi, ' ')
     .replace(/\s+/g, ' ')
     .trim();
   const common = {
     amount,
     currency: 'BRL',
-    description: description || message.trim(),
+    description: description || 'Movimentação',
     confidence: 1,
   };
 
@@ -300,7 +331,14 @@ function directTaggedCommand(message: string): FinanceAction | null {
 
   if (['receita', 'entrada', 'salario'].includes(rawTag)) {
     const bank = canonicalBank(details);
-    return { ...common, intent: 'create_income', category: 'Receitas', bank, account: bank };
+    return {
+      ...common,
+      intent: 'create_income',
+      category: 'Receitas',
+      bank,
+      account: bank,
+      description: bank ? `Recebimento · ${bank}` : 'Receita',
+    };
   }
 
   if (rawTag === 'investimento' || rawTag === 'investir') {

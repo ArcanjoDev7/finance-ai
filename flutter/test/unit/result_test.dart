@@ -63,7 +63,20 @@ void main() {
 
     final income = parseTaggedFinanceCommand('@receita Nubank 500', 500);
     expect(income?['bank'], 'Nubank');
+    expect(income?['description'], 'Recebimento · Nubank');
+    expect(
+      parseTaggedFinanceCommand('@receita 6000', 6000)?['description'],
+      'Receita',
+    );
     final crypto = parseTaggedFinanceCommand('@cripto bnb 100', 100);
     expect(crypto?['investment'], 'BNB');
+    expect(canonicalCryptoTicker('gastei 500 conto na dogcoin'), 'DOGE');
+    expect(
+      cleanFinanceDescription(
+        'cmprei um lanche por 25 reais',
+        fallback: 'Despesa',
+      ),
+      'Um lanche',
+    );
   });
 }
