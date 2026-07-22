@@ -17,6 +17,7 @@ type FinanceAction = {
   wallet?: string;
   confidence: number;
   savedTransactionId?: string;
+  actions?: FinanceAction[];
 };
 
 const jsonHeaders = {
@@ -163,6 +164,22 @@ function parseBrlAmount(value: string) {
   return Number.isFinite(amount) && amount > 0 ? amount : undefined;
 }
 
+function editDistance(left: string, right: string) {
+  let previous = Array.from({ length: right.length + 1 }, (_, index) => index);
+  for (let leftIndex = 0; leftIndex < left.length; leftIndex += 1) {
+    const current = [leftIndex + 1];
+    for (let rightIndex = 0; rightIndex < right.length; rightIndex += 1) {
+      current.push(Math.min(
+        previous[rightIndex + 1] + 1,
+        current[rightIndex] + 1,
+        previous[rightIndex] + (left[leftIndex] === right[rightIndex] ? 0 : 1),
+      ));
+    }
+    previous = current;
+  }
+  return previous.at(-1) ?? Number.MAX_SAFE_INTEGER;
+}
+
 function canonicalCryptoAsset(value: string) {
   const text = normalizeText(value);
   const assets: Array<[RegExp, string]> = [
@@ -175,7 +192,28 @@ function canonicalCryptoAsset(value: string) {
     [/\b(litecoin|ltc)\b/, 'LTC'], [/\b(tron|trx)\b/, 'TRX'],
     [/\b(toncoin|ton)\b/, 'TON'], [/\b(shiba inu|shib)\b/, 'SHIB'],
   ];
-  return assets.find(([pattern]) => pattern.test(text))?.[1];
+  const exact = assets.find(([pattern]) => pattern.test(text))?.[1];
+  if (exact) return exact;
+  const fullNames: Array<[string, string]> = [
+    ['bitcoin', 'BTC'], ['ethereum', 'ETH'], ['binancecoin', 'BNB'],
+    ['solana', 'SOL'], ['cardano', 'ADA'], ['dogecoin', 'DOGE'],
+    ['ripple', 'XRP'], ['tether', 'USDT'], ['avalanche', 'AVAX'],
+    ['polkadot', 'DOT'], ['chainlink', 'LINK'], ['litecoin', 'LTC'],
+    ['toncoin', 'TON'],
+  ];
+  const words = text
+    .split(/[^a-z]+/)
+    .filter((word) => word.length >= 5)
+    .map((word) => word.replace(/(.)\1+/g, '$1'));
+  for (const word of words) {
+    for (const [name, ticker] of fullNames) {
+      const limit = name.length >= 8 ? 3 : 2;
+      if (Math.abs(word.length - name.length) <= limit && editDistance(word, name) <= limit) {
+        return ticker;
+      }
+    }
+  }
+  return undefined;
 }
 
 function canonicalBank(value: string) {
@@ -357,6 +395,19 @@ function directTaggedCommand(message: string): FinanceAction | null {
       ? 'create_crypto_conversion'
       : 'create_crypto_purchase';
   return { ...common, intent, investment };
+}
+
+function directTaggedCommands(message: string): FinanceAction[] | null {
+  const tagPattern = /@(cripto|crypto|despesa|dispesa|gasto|saida|cartao|receita|entrada|salario|investimento|investir)\b/gi;
+  const matches = [...message.matchAll(tagPattern)];
+  if (matches.length === 0) return null;
+  const commands = matches.map((match, index) => {
+    const start = match.index ?? 0;
+    const end = index + 1 < matches.length ? matches[index + 1].index : message.length;
+    return message.slice(start, end).trim();
+  });
+  const actions = commands.map(directTaggedCommand);
+  return actions.every((action): action is FinanceAction => action != null) ? actions : null;
 }
 
 function isoDate(value: Date) {
@@ -670,44 +721,53 @@ Deno.serve(async (request) => {
     .single();
   if (actionError) return response({ error: { code: 'ACTION_CREATION_FAILED' } }, 500);
 
-  const directAction = directTaggedCommand(payload.message) ??
-    directCompletedCrypto(payload.message) ??
-    directCompletedInvestment(payload.message) ??
-    directCompletedBankIncome(payload.message) ??
-    directCompletedPurchase(payload.message);
-  if (directAction) {
+  const taggedActions = directTaggedCommands(payload.message);
+  const singleDirectAction = taggedActions == null
+    ? directCompletedCrypto(payload.message) ??
+      directCompletedInvestment(payload.message) ??
+      directCompletedBankIncome(payload.message) ??
+      directCompletedPurchase(payload.message)
+    : null;
+  const directActions = taggedActions ?? (singleDirectAction ? [singleDirectAction] : null);
+  if (directActions) {
     const occurredDate = explicitOccurredDate(payload.message);
-    if (occurredDate) directAction.date = occurredDate;
+    if (occurredDate) directActions.forEach((directAction) => directAction.date = occurredDate);
     try {
-      const transactionId = await persistFinancialAction(
-        admin,
-        userId,
-        directAction,
-        payload.idempotencyKey,
-      );
-      if (transactionTypeFor(directAction.intent) && !transactionId) {
-        throw new Error('TRANSACTION_CREATION_FAILED');
+      for (let index = 0; index < directActions.length; index += 1) {
+        const directAction = directActions[index];
+        const transactionId = await persistFinancialAction(
+          admin,
+          userId,
+          directAction,
+          indexedIdempotencyKey(payload.idempotencyKey, index),
+        );
+        if (transactionTypeFor(directAction.intent) && !transactionId) {
+          throw new Error('TRANSACTION_CREATION_FAILED');
+        }
+        if (transactionId) directAction.savedTransactionId = transactionId;
       }
-      if (transactionId) directAction.savedTransactionId = transactionId;
     } catch {
       await admin.from('ai_actions').update({ status: 'failed' }).eq('id', action.id);
       return response({ error: { code: 'ACTION_PERSISTENCE_FAILED' } }, 500);
     }
+    const directResult: FinanceAction = directActions.length === 1
+      ? directActions[0]
+      : { intent: 'multiple_actions', actions: directActions, confidence: 1 };
     await admin.from('chat_messages').insert({
       user_id: userId,
       chat_session_id: sessionId,
       role: 'assistant',
-      content: directAction,
+      content: directResult,
       model_name: 'deterministic-command-parser',
     });
     await admin.from('ai_actions').update({
-      intent: directAction.intent,
-      result_json: directAction,
+      intent: directResult.intent,
+      result_json: directResult,
       status: 'processed',
       processed_at: new Date().toISOString(),
     }).eq('id', action.id);
     await admin.from('chat_sessions').update({ last_message_at: new Date().toISOString() }).eq('id', sessionId);
-    return response({ sessionId, action: directAction, replayed: false, source: 'deterministic' });
+    return response({ sessionId, action: directResult, replayed: false, source: 'deterministic' });
   }
 
   const instruction = `Você é o assistente financeiro do Finance AI para usuários brasileiros.

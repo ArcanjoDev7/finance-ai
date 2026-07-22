@@ -120,4 +120,27 @@ void main() {
     expect(timeline[1].kind, EntryKind.investment);
     expect(timeline.last.kind, EntryKind.income);
   });
+
+  test('Multiple tagged commands create one independent action per tag', () {
+    final result = parseTaggedFinanceCommands(
+      '@despesa 10 na feira @receita 5000',
+    );
+    final actions = (result?['actions'] as List).cast<Map<String, dynamic>>();
+
+    expect(actions, hasLength(2));
+    expect(actions.first['intent'], 'create_expense');
+    expect(actions.first['amount'], 10);
+    expect(actions.first['description'], 'Feira');
+    expect(actions.last['intent'], 'create_income');
+    expect(actions.last['amount'], 5000);
+  });
+
+  test('Misspelled crypto names are safely normalized in tagged commands', () {
+    final action = parseTaggedFinanceCommands('@cripto ethereuiiimm 5000');
+
+    expect(canonicalCryptoTicker('ethereuiiimm'), 'ETH');
+    expect(action?['intent'], 'create_crypto_purchase');
+    expect(action?['investment'], 'ETH');
+    expect(action?['amount'], 5000);
+  });
 }

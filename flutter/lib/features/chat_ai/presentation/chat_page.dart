@@ -78,7 +78,60 @@ String? canonicalCryptoTicker(String value) {
       return entry.key;
     }
   }
+  final words = source
+      .split(RegExp(r'[^a-z]+'))
+      .where((word) => word.length >= 5)
+      .map(
+        (word) => word.replaceAllMapped(
+          RegExp(r'(.)\1+'),
+          (match) => match.group(1)!,
+        ),
+      );
+  const fullNames = <String, String>{
+    'bitcoin': 'BTC',
+    'ethereum': 'ETH',
+    'binancecoin': 'BNB',
+    'solana': 'SOL',
+    'cardano': 'ADA',
+    'dogecoin': 'DOGE',
+    'ripple': 'XRP',
+    'tether': 'USDT',
+    'avalanche': 'AVAX',
+    'polkadot': 'DOT',
+    'chainlink': 'LINK',
+    'litecoin': 'LTC',
+    'toncoin': 'TON',
+  };
+  for (final word in words) {
+    for (final candidate in fullNames.entries) {
+      final limit = candidate.key.length >= 8 ? 3 : 2;
+      if ((word.length - candidate.key.length).abs() <= limit &&
+          _editDistance(word, candidate.key) <= limit) {
+        return candidate.value;
+      }
+    }
+  }
   return null;
+}
+
+int _editDistance(String left, String right) {
+  var previous = List<int>.generate(right.length + 1, (index) => index);
+  for (var leftIndex = 0; leftIndex < left.length; leftIndex += 1) {
+    final current = <int>[leftIndex + 1];
+    for (var rightIndex = 0; rightIndex < right.length; rightIndex += 1) {
+      final substitution =
+          previous[rightIndex] + (left[leftIndex] == right[rightIndex] ? 0 : 1);
+      current.add(
+        [
+          previous[rightIndex + 1] + 1,
+          current[rightIndex] + 1,
+          substitution,
+        ].reduce((a, b) => a < b ? a : b),
+      );
+    }
+    previous = current;
+  }
+  return previous.last;
 }
 
 String? canonicalBankName(String value) {
@@ -206,6 +259,54 @@ Map<String, dynamic>? parseTaggedFinanceCommand(
     'amount': amount,
     'investment': canonicalCryptoTicker(details) ?? 'CRIPTO',
   };
+}
+
+double? parseFinanceAmount(String source) {
+  final raw = RegExp(r'\d[\d.,]*').firstMatch(source)?.group(0);
+  if (raw == null) return null;
+  final hasDot = raw.contains('.');
+  final hasComma = raw.contains(',');
+  if (!hasDot && !hasComma) return double.tryParse(raw);
+  if (hasDot && hasComma) {
+    final decimalSeparator = raw.lastIndexOf('.') > raw.lastIndexOf(',')
+        ? '.'
+        : ',';
+    final normalized = raw
+        .replaceAll(decimalSeparator == '.' ? ',' : '.', '')
+        .replaceAll(decimalSeparator, '.');
+    return double.tryParse(normalized);
+  }
+  final separator = hasDot ? '.' : ',';
+  final fractionSize = raw.length - raw.lastIndexOf(separator) - 1;
+  final normalized = fractionSize == 3
+      ? raw.replaceAll(separator, '')
+      : raw.replaceAll(separator, '.');
+  return double.tryParse(normalized);
+}
+
+Map<String, dynamic>? parseTaggedFinanceCommands(String original) {
+  final pattern = RegExp(
+    r'@(cripto|crypto|despesa|dispesa|gasto|saida|cartao|receita|entrada|salario|investimento|investir)\b',
+    caseSensitive: false,
+  );
+  final matches = pattern.allMatches(original).toList();
+  if (matches.isEmpty) return null;
+  final actions = <Map<String, dynamic>>[];
+  for (var index = 0; index < matches.length; index += 1) {
+    final end = index + 1 < matches.length
+        ? matches[index + 1].start
+        : original.length;
+    final command = original.substring(matches[index].start, end).trim();
+    final action = parseTaggedFinanceCommand(
+      command,
+      parseFinanceAmount(command),
+    );
+    if (action == null) return null;
+    actions.add(action);
+  }
+  return actions.length == 1
+      ? actions.single
+      : {'intent': 'multiple_actions', 'actions': actions};
 }
 
 class _ChatPageState extends State<ChatPage> {
@@ -454,7 +555,7 @@ class _ChatPageState extends State<ChatPage> {
   Map<String, dynamic> _parse(String text) {
     final source = text.toLowerCase();
     final amount = _parseAmount(source);
-    final tagged = parseTaggedFinanceCommand(text, amount);
+    final tagged = parseTaggedFinanceCommands(text);
     if (tagged != null) return tagged;
     final crypto = canonicalCryptoTicker(source);
     if (crypto != null &&
@@ -573,28 +674,7 @@ class _ChatPageState extends State<ChatPage> {
     return {'intent': 'query_summary'};
   }
 
-  double? _parseAmount(String source) {
-    final raw = RegExp(r'\d[\d.,]*').firstMatch(source)?.group(0);
-    if (raw == null) return null;
-    final hasDot = raw.contains('.');
-    final hasComma = raw.contains(',');
-    if (!hasDot && !hasComma) return double.tryParse(raw);
-    if (hasDot && hasComma) {
-      final decimalSeparator = raw.lastIndexOf('.') > raw.lastIndexOf(',')
-          ? '.'
-          : ',';
-      final normalized = raw
-          .replaceAll(decimalSeparator == '.' ? ',' : '.', '')
-          .replaceAll(decimalSeparator, '.');
-      return double.tryParse(normalized);
-    }
-    final separator = hasDot ? '.' : ',';
-    final fractionSize = raw.length - raw.lastIndexOf(separator) - 1;
-    final normalized = fractionSize == 3
-        ? raw.replaceAll(separator, '')
-        : raw.replaceAll(separator, '.');
-    return double.tryParse(normalized);
-  }
+  double? _parseAmount(String source) => parseFinanceAmount(source);
 
   void _apply(Map<String, dynamic> action) {
     final nestedActions = action['actions'];
