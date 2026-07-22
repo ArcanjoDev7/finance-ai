@@ -698,7 +698,10 @@ class _ChatPageState extends State<ChatPage> {
                     child: TextField(
                       controller: _input,
                       focusNode: _inputFocus,
-                      onSubmitted: (_) => _send(),
+                      keyboardType: TextInputType.multiline,
+                      textInputAction: TextInputAction.newline,
+                      minLines: 1,
+                      maxLines: 5,
                       decoration: const InputDecoration(
                         prefixIcon: Icon(Icons.alternate_email_rounded),
                         hintText: 'Digite @ para ver os comandos',
